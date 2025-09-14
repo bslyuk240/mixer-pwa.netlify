@@ -1,41 +1,87 @@
-const CACHE = "mixer-v1";
+// sw.js — Virtual Mixer Trainer
+// Cache version: bump this when you deploy new assets
+const CACHE = "mixer-v2";
+
+// Static assets you want available offline.
+// These paths assume all files are in the site root on Netlify.
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
+  "./icon-192.png",
+  "./icon-512.png",
   "./icon-512-maskable.png",
-  "./apple-touch-icon.png"
+  "./apple-touch-icon.png",
+  "./splash-dark.png",
+  "./splash-light.png"
+  // Add more here if you later add CSS/JS files
+  // e.g. "./styles.css", "./app.js"
 ];
 
-self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(ASSETS))
+  );
+  // Activate this SW immediately after install
+  self.skipWaiting();
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.map((k) => (k !== CACHE ? caches.delete(k) : undefined)))
     )
   );
+  // Control all open clients without a reload
+  self.clients.claim();
 });
 
-self.addEventListener("fetch", (e) => {
-  const req = e.request;
+// Network strategies:
+// - Navigations: network-first, fallback to cached index.html when offline.
+// - Same-origin requests for other assets: stale-while-revalidate.
+// - Cross-origin: just pass-through (don’t cache).
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // Only handle GET
+  if (req.method !== "GET") return;
+
+  // Navigations (address bar / SPA routes)
   if (req.mode === "navigate") {
-    e.respondWith(
-      fetch(req).then(r => {
-        caches.open(CACHE).then(c => c.put(req, r.clone()));
-        return r;
-      }).catch(() => caches.match(req).then(r => r || caches.match("./index.html")))
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          // Cache a copy for offline
+          caches.open(CACHE).then((c) => c.put(req, res.clone()));
+          return res;
+        })
+        .catch(async () => {
+          // Offline fallback to cached page or index.html
+          return (await caches.match(req)) || (await caches.match("./index.html"));
+        })
     );
-  } else {
-    e.respondWith(
-      caches.match(req).then(r => r || fetch(req).then(resp => {
-        caches.open(CACHE).then(c => c.put(req, resp.clone()));
-        return resp;
-      }))
+    return;
+  }
+
+  // Only cache same-origin non-navigation requests
+  if (url.origin === location.origin) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        const fetchPromise = fetch(req)
+          .then((networkRes) => {
+            // Put a fresh copy in cache (ignore opaque/error responses)
+            if (networkRes && networkRes.status === 200) {
+              caches.open(CACHE).then((c) => c.put(req, networkRes.clone()));
+            }
+            return networkRes;
+          })
+          .catch(() => cached); // use cache if network fails
+
+        // Stale-while-revalidate: serve cache immediately, update in background
+        return cached || fetchPromise;
+      })
     );
   }
+  // Else: cross-origin – don’t cache; let it go to network
 });
