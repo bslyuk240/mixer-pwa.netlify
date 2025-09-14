@@ -595,6 +595,11 @@
 
   // Unlock audio on first gesture
   window.addEventListener('click', ()=> ctx.resume(), { once:true });
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js');
+  });
+}
   </script>
 </body>
 </html>
