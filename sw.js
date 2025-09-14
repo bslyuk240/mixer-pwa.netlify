@@ -4,8 +4,9 @@ const ASSETS = [
   "./index.html",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
-  // If later you split CSS/JS into files, list them here too so they cache offline.
+  "./icons/icon-512.png",
+  "./icon-512-maskable.png",
+  "./apple-touch-icon.png"
 ];
 
 self.addEventListener("install", (e) => {
@@ -22,7 +23,6 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  // Network-first for navigations; cache-first for assets
   if (req.mode === "navigate") {
     e.respondWith(
       fetch(req).then(r => {
