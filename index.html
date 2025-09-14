@@ -4,25 +4,39 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Virtual Mixer Trainer v0.2</title>
-<link rel="manifest" href="./manifest.webmanifest">
-<meta name="theme-color" content="#0e1116">
-<script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js");
-    });
-  }
-</script>
+
+  <!-- BRAND ICONS -->
+  <link rel="icon" href="./favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" sizes="180x180">
+
   <style>
     :root{
       --bg:#0e1116;--panel:#151a22;--panel2:#1b222c;--text:#e8eef9;--muted:#9fb0c6;--accent:#4da3ff;--good:#7ce38b;--warn:#ffca63;--danger:#ff7a7a;
     }
     *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
     body{margin:0;background:linear-gradient(180deg,#0d1117,#0b0e13 50%,#0c1016);color:var(--text)}
+
+    /* Header (same layout) */
     header{position:sticky;top:0;background:rgba(13,17,23,.85);backdrop-filter: blur(6px);border-bottom:1px solid #1f2630;z-index:5}
     header .wrap{display:flex;align-items:center;gap:12px;padding:10px 12px;flex-wrap:wrap}
     h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
+    .brandmark{width:20px;height:20px;border-radius:6px;border:1px solid #263040;background:#0f141b;object-fit:contain}
+
     .pill{border:1px solid #2b3442;padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap}
+    .hidden{display:none}
+
+    /* Buttons */
+    .btn{background:#121823;color:#cfe1fb;border:1px solid #283343;padding:6px 10px;border-radius:10px;font-size:12px;cursor:pointer}
+    .btn:hover{border-color:#3a4c66}
+    .toggle{display:flex;gap:8px}
+    .toggle button{flex:1}
+    /* Record button state */
+    .btn-rec{ border-color:#3a2830; }
+    .btn-rec.recording{ background:#2a0f12;border-color:#7a2b2b;color:#ffb9b9; }
+    .pill.recording{ border-color:#7a2b2b;color:#ffb9b9;background:#210d10; }
+
+    /* Channel grid (like your first script) */
     .grid{display:grid;grid-template-columns:repeat(7,minmax(220px,1fr));gap:14px;padding:16px}
     .strip{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px}
     .strip h3{margin:0 0 4px;font-size:13px;color:#d7e3f8;letter-spacing:.3px}
@@ -30,37 +44,54 @@
     .row{display:flex;align-items:center;gap:8px;margin:6px 0}
     label{font-size:12px;color:#b7c6db}
     input[type="range"]{width:100%}
-    input[type="number"], input[type="text"]{background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:8px;padding:6px}
-    input[type="text"]{width:180px}
-    .btn{background:#121823;color:#cfe1fb;border:1px solid #283343;padding:6px 10px;border-radius:10px;font-size:12px;cursor:pointer}
-    .btn:hover{border-color:#3a4c66}
-    .toggle{display:flex;gap:8px}
-    .toggle button{flex:1}
-    .meter{height:72px;background:#0b0f15;border:1px solid #243145;border-radius:8px;position:relative;overflow:hidden}
-    .meter .bar{position:absolute;bottom:0;left:0;right:0;height:0;background:linear-gradient(180deg,#6be47a,#ffe27a 70%,#ff8b8b)}
+    input[type="text"]{background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:8px;padding:6px;width:180px}
+
+    /* METERS: bigger + clearer */
+    .meter{background:#0b0f15;border:1px solid #243145;border-radius:8px;position:relative;overflow:hidden}
+    .meter .bar{position:absolute;bottom:0;left:0;right:0;height:0;background:linear-gradient(180deg,#6be47a 0%,#ffe27a 65%,#ff8b8b 100%);transition:height 60ms linear}
+    /* Channel meters inside rows */
+    .row .meter{flex:0 0 18px;width:18px;height:140px;border-radius:8px}
+    /* Master meter larger */
+    #masterMeter.meter{flex:0 0 22px;width:22px;height:160px;border-radius:10px}
+
     .small{font-size:11px;color:#93a7c0}
-    .master{grid-column:1/-1;display:grid;grid-template-columns:repeat(7,1fr);gap:14px;padding:0 16px 16px}
+
+    /* Bottom: Master + Notes */
+    .master{grid-column:1/-1;display:grid;grid-template-columns:380px 1fr;gap:14px;padding:0 16px 16px}
     .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px}
     .row.inline>*{flex:1}
-    select, .select{width:100%;background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:10px;padding:8px}
-    .helper{padding:12px 16px;color:#cdd9ed}
-    .helper h2{font-size:14px;margin:0 0 8px}
+    select{width:100%;background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:10px;padding:8px}
+
+    .note{font-size:12px;color:#a9bad5}
     .badge{display:inline-flex;align-items:center;gap:6px;background:#0f1620;border:1px solid #293447;color:#c6d5ef;border-radius:999px;padding:6px 10px;font-size:12px}
     .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d131b;border:1px solid #293447;border-bottom-color:#1c2734;padding:2px 6px;border-radius:6px;font-size:11px}
-    .note{font-size:12px;color:#a9bad5}
     .foot{display:flex;gap:8px;flex-wrap:wrap}
+
     .disabled{opacity:.45;pointer-events:none;filter:grayscale(.3)}
-    @media (max-width: 1200px){ .grid{grid-template-columns:repeat(3,minmax(220px,1fr));} .master{grid-template-columns:repeat(3,1fr);} }
-    @media (max-width: 750px){ .grid{grid-template-columns:repeat(1,minmax(220px,1fr));} .master{grid-template-columns:repeat(1,1fr);} }
+
+    @media (max-width: 1200px){
+      .grid{grid-template-columns:repeat(3,minmax(220px,1fr));}
+      .master{grid-template-columns:repeat(1,1fr);}
+    }
+    @media (max-width: 750px){
+      .grid{grid-template-columns:repeat(1,minmax(220px,1fr));}
+      .master{grid-template-columns:repeat(1,1fr);}
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap">
-      <h1>🎚️ Virtual Mixer Trainer <span class="small">v0.2</span></h1>
+      <!-- brand icon beside the title -->
+      <img class="brandmark" src="./favicon.svg" alt="Logo">
+      <h1>Virtual Mixer Trainer <span class="small">v0.2</span></h1>
       <span class="pill">Load stems • Practice live & studio • 🎷 Sax • Demo/Full lock</span>
+
       <button id="playAll" class="btn">▶ Play All</button>
       <button id="pauseAll" class="btn">⏸ Pause All</button>
+      <button id="recordBtn" class="btn btn-rec">⏺ Record</button>
+      <span id="recTimer" class="pill hidden">00:00</span>
+
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label class="small">Scenario</label>
         <select id="scenario">
@@ -77,16 +108,9 @@
     </div>
   </header>
 
-  <div class="helper">
-    <h2>How to use</h2>
-    <div class="note">
-      Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.<br>
-      (Training build — for real sales, verify keys on your server.)
-    </div>
-  </div>
-
   <section class="grid" id="grid"></section>
 
+  <!-- Bottom: Master Bus + How to use / Notes -->
   <section class="master">
     <div class="card section">
       <h3>Master Bus</h3>
@@ -97,9 +121,15 @@
         <span class="badge">Tip: Peaks ~ -6 dBFS. Avoid red.</span>
       </div>
     </div>
-    <div class="card section" style="grid-column:span 6">
-      <h3>Training Notes</h3>
-      <ul class="note">
+
+    <div class="card section" style="grid-column:span 1">
+      <h3>How to use</h3>
+      <div class="note">
+        Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.
+        (Training build — for real sales, verify keys on your server.)
+      </div>
+      <h3 style="margin-top:10px">Training Notes</h3>
+      <ul class="note" style="margin-left:18px">
         <li><b>Gain staging:</b> Set <span class="kbd">TRIM</span> first.</li>
         <li><b>HPF:</b> Vocals/Sax start 90–120 Hz.</li>
         <li><b>EQ:</b> Clean muddiness (200–400 Hz); presence (2–5 kHz); air (10–12 kHz).</li>
@@ -112,8 +142,8 @@
   </section>
 
   <script>
-  // ======== License (demo vs full) ========
-  const LICENSE_KEY = "Bensly-VMIX-2025"; // Example key for training
+  // ===== License (demo vs full) =====
+  const LICENSE_KEY = "Bensly-VMIX-2025";
   let isFull = false;
   const licenseInput = document.getElementById('licenseInput');
   const licenseStatus = document.getElementById('licenseStatus');
@@ -129,10 +159,12 @@
     }
   });
 
-  // ======== Audio Engine ========
+  // ===== Audio Engine =====
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const masterGain = ctx.createGain();
   const analyserMaster = ctx.createAnalyser();
+  analyserMaster.fftSize = 1024;
+  analyserMaster.smoothingTimeConstant = 0.85;
   masterGain.connect(analyserMaster).connect(ctx.destination);
 
   // Reverb bus
@@ -209,7 +241,7 @@
       </div>
     `;
 
-    // Build Web Audio graph per channel
+    // Web Audio nodes per channel
     const media = new Audio();
     media.loop = true;
     media.crossOrigin = 'anonymous';
@@ -231,7 +263,7 @@
     const pan = ctx.createStereoPanner();
     const auxSend = ctx.createGain();
     const postFader = ctx.createGain(); // channel fader
-    const analyser = ctx.createAnalyser(); analyser.fftSize=256;
+    const analyser = ctx.createAnalyser(); analyser.fftSize=1024; analyser.smoothingTimeConstant=0.85;
 
     // Routing
     src.connect(preGain)
@@ -287,19 +319,21 @@
       delayMix: strip.querySelector('[data-role=delayMix]'),
     };
 
-    // UI wiring
+    /* === File load: NO auto-play. Must press Play All. === */
     ui.file.addEventListener('change', e=>{
       const file = e.target.files?.[0];
       if(!file) return;
       const url = URL.createObjectURL(file);
+      media.autoplay = false;
       media.src = url;
-      media.play().catch(()=>{});
-      ctx.resume();
+      media.pause();
+      try { media.currentTime = 0; } catch(_) {}
+      // Do NOT resume ctx or play here
     });
+
+    // UI controls
     ui.trim.addEventListener('input', ()=> preGain.gain.value = parseFloat(ui.trim.value));
-    ui.hpfToggle.addEventListener('change', ()=>{
-      hpf.frequency.value = ui.hpfToggle.checked ? parseFloat(ui.hpfFreq.value) : 20;
-    });
+    ui.hpfToggle.addEventListener('change', ()=>{ hpf.frequency.value = ui.hpfToggle.checked ? parseFloat(ui.hpfFreq.value) : 20; });
     ui.hpfFreq.addEventListener('input', ()=>{ if(ui.hpfToggle.checked) hpf.frequency.value = parseFloat(ui.hpfFreq.value); });
     ui.eqLow.addEventListener('input', ()=> eqLow.gain.value = parseFloat(ui.eqLow.value));
     ui.eqMidGain.addEventListener('input', ()=> eqMid.gain.value = parseFloat(ui.eqMidGain.value));
@@ -332,13 +366,15 @@
     ui.delayFb.addEventListener('input', ()=> delayFb.gain.value = parseFloat(ui.delayFb.value));
     ui.delayMix.addEventListener('input', ()=> delayMix.gain.value = parseFloat(ui.delayMix.value));
 
-    // meters
+    // ===== Channel meter (RMS time-domain → visible) =====
     function drawMeter(){
-      const arr = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(arr);
-      let val = 0; for(const v of arr) val = Math.max(val, v);
-      const pct = val/255;
-      ui.meter.style.height = Math.round(pct*100)+"%";
+      const arr = new Uint8Array(analyser.fftSize);
+      analyser.getByteTimeDomainData(arr);
+      let sum = 0;
+      for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum += v*v; }
+      const rms = Math.sqrt(sum/arr.length);   // 0..~1
+      const pct = Math.min(100, Math.max(0, rms * 140)); // scale for visibility
+      ui.meter.style.height = Math.round(pct)+"%";
       requestAnimationFrame(drawMeter);
     }
     drawMeter();
@@ -347,13 +383,17 @@
     return strip;
   }
 
+  /* ===== MUTE + SOLO (mute wins; solo isolates) ===== */
   function updateSoloMute(){
     const anySolo = Object.values(state.channels).some(ch => ch.strip.dataset.solo==='1');
     for(const ch of Object.values(state.channels)){
-      const soloed = ch.strip.dataset.solo==='1';
-      const target = (!anySolo || soloed) ? parseFloat(ch.ui.fader.value) : 0;
+      const isSoloed = ch.strip.dataset.solo==='1';
+      const isMuted  = ch.strip.dataset.muted==='1';
+      const faderVal = parseFloat(ch.ui.fader.value);
+      const target = isMuted ? 0 : ((anySolo && !isSoloed) ? 0 : faderVal);
       ch.nodes.postFader.gain.value = target;
-      ch.ui.mute.textContent = target>0 ? 'Mute' : 'Unmute';
+      ch.ui.mute.textContent = isMuted ? 'Unmute' : 'Mute';
+      ch.ui.solo.textContent = isSoloed ? 'Unsolo' : 'Solo';
     }
   }
 
@@ -362,17 +402,19 @@
   channelDefs.forEach((def, i) => {
     const strip = createChannel(def, i);
     grid.appendChild(strip);
-    // add mute/solo handlers after append
     const ch = state.channels[def.id];
+
+    // MUTE
     ch.ui.mute.addEventListener('click', ()=>{
-      const muted = ch.nodes.postFader.gain.value>0.0001;
-      ch.nodes.postFader.gain.value = muted? 0 : parseFloat(ch.ui.fader.value);
-      ch.ui.mute.textContent = muted? 'Unmute':'Mute';
+      const isMuted = ch.strip.dataset.muted==='1';
+      ch.strip.dataset.muted = isMuted ? '0' : '1';
       updateSoloMute();
     });
+
+    // SOLO
     ch.ui.solo.addEventListener('click', ()=>{
-      ch.strip.dataset.solo = ch.strip.dataset.solo==='1' ? '0' : '1';
-      ch.ui.solo.textContent = ch.strip.dataset.solo==='1' ? 'Unsolo' : 'Solo';
+      const isSoloed = ch.strip.dataset.solo==='1';
+      ch.strip.dataset.solo = isSoloed ? '0' : '1';
       updateSoloMute();
     });
   });
@@ -380,32 +422,23 @@
   // Master controls
   const masterFader = document.getElementById('masterFader');
   const reverbReturnKnob = document.getElementById('reverbReturn');
-  const masterMeter = document.querySelector('#masterMeter .bar');
   masterFader.addEventListener('input', ()=> masterGain.gain.value = parseFloat(masterFader.value));
   reverbReturnKnob.addEventListener('input', ()=> reverbReturn.gain.value = parseFloat(reverbReturnKnob.value));
 
-  function drawMaster(){
-    const arr = new Uint8Array(analyserMaster.frequencyBinCount);
-    analyserMaster.getByteFrequencyData(arr);
-    let val = 0; for(const v of arr) val = Math.max(val, v);
-    const pct = val/255;
-    masterMeter.style.height = Math.round(pct*100)+"%";
-    requestAnimationFrame(drawMaster);
-  }
-  analyserMaster.fftSize=256; drawMaster();
-
-  // Transport
-  const playAll = document.getElementById('playAll');
-  const pauseAll = document.getElementById('pauseAll');
-  playAll.addEventListener('click', ()=>{
-    ctx.resume();
-    for(const ch of Object.values(state.channels)){
-      if(ch.media.src) ch.media.play().catch(()=>{});
+  // ===== Master meter (RMS time-domain) =====
+  (function masterMeterLoop(){
+    const bar = document.querySelector('#masterMeter .bar');
+    const arr = new Uint8Array(analyserMaster.fftSize);
+    function draw(){
+      analyserMaster.getByteTimeDomainData(arr);
+      let sum=0; for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum+=v*v; }
+      const rms=Math.sqrt(sum/arr.length);
+      const pct = Math.min(100, Math.max(0, rms*140));
+      bar.style.height = Math.round(pct)+"%";
+      requestAnimationFrame(draw);
     }
-  });
-  pauseAll.addEventListener('click', ()=>{
-    for(const ch of Object.values(state.channels)) ch.media.pause();
-  });
+    draw();
+  })();
 
   // Scenarios / Presets
   function applyScenario(name){
@@ -462,18 +495,86 @@
   }
   refreshDemoLocks();
 
-  // Master meter draw loop
-  function drawMaster(){
-    const arr = new Uint8Array(analyserMaster.frequencyBinCount);
-    analyserMaster.getByteFrequencyData(arr);
-    let val = 0; for(const v of arr) val = Math.max(val, v);
-    const pct = val/255;
-    document.querySelector('#masterMeter .bar').style.height = Math.round(pct*100)+"%";
-    requestAnimationFrame(drawMaster);
-  }
-  analyserMaster.fftSize=256; drawMaster();
+  // ===== Recording setup (capture master mix) =====
+  let mediaRecorder = null;
+  let recChunks = [];
+  let recStartTime = 0;
+  let recTimerId = null;
 
-  // Transport
+  const recDest = ctx.createMediaStreamDestination(); // tap master to a stream
+  masterGain.connect(recDest);
+
+  const recBtn = document.getElementById('recordBtn');
+  const recTimer = document.getElementById('recTimer');
+
+  const canRecord = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+    ? (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') || MediaRecorder.isTypeSupported('audio/webm'))
+    : false;
+
+  function formatTime(ms){
+    const s = Math.floor(ms/1000);
+    const m = Math.floor(s/60);
+    const ss = (s%60).toString().padStart(2,'0');
+    return `${m}:${ss}`;
+  }
+  function startTimer(){
+    recStartTime = performance.now();
+    recTimer.classList.remove('hidden');
+    recTimer.classList.add('recording');
+    recTimer.textContent = '00:00';
+    recTimerId = setInterval(()=>{
+      const t = performance.now() - recStartTime;
+      recTimer.textContent = formatTime(t);
+    }, 250);
+  }
+  function stopTimer(){
+    if(recTimerId){ clearInterval(recTimerId); recTimerId = null; }
+    recTimer.classList.remove('recording');
+  }
+  function startRecording(){
+    ctx.resume();
+    const mime = (typeof MediaRecorder!=='undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(recDest.stream, { mimeType: mime, audioBitsPerSecond: 128000 });
+    recChunks = [];
+    mediaRecorder.ondataavailable = e => { if(e.data && e.data.size > 0) recChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      stopTimer();
+      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      a.href = url;
+      a.download = `VirtualMixer_${ts}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 100);
+      recBtn.textContent = '⏺ Record';
+      recBtn.classList.remove('recording');
+    };
+    mediaRecorder.start(250);
+    startTimer();
+    recBtn.textContent = '■ Stop';
+    recBtn.classList.add('recording');
+  }
+  function stopRecording(){
+    if(mediaRecorder && mediaRecorder.state !== 'inactive'){
+      mediaRecorder.stop();
+    }
+  }
+  recBtn.addEventListener('click', ()=>{
+    if(!canRecord){
+      alert('Recording is not supported in this browser. Use Chrome/Edge/Brave on desktop.');
+      return;
+    }
+    if(!mediaRecorder || mediaRecorder.state === 'inactive'){
+      startRecording();
+    } else {
+      stopRecording();
+    }
+  });
+
+  // ===== Transport: Play/Pause (no auto-play elsewhere) =====
   document.getElementById('playAll').addEventListener('click', ()=>{
     ctx.resume();
     for(const ch of Object.values(state.channels)){
