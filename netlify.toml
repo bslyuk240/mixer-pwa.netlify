@@ -1,6 +1,10 @@
 [build]
+  # Your site files (index.html is in the repo root in your screenshot),
+  # so publish the root folder:
   publish = "."
+  # Your functions live in netlify/functions
   functions = "netlify/functions"
-  
+
 [functions]
   node_bundler = "esbuild"
+  external_node_modules = ["@supabase/supabase-js"]
