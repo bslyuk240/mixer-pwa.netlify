@@ -5,16 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Virtual Mixer Trainer v0.2</title>
 
-  <!-- BRAND ICONS -->
-  <link rel="icon" href="./favicon.ico">
-  <link rel="icon" type="image/svg+xml" href="./favicon.svg"><!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Virtual Mixer Trainer v0.2</title>
-
-  <!-- PWA / icons you already have in your site root -->
+  <!-- PWA / Icons (unchanged) -->
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="./icon-512.png">
@@ -24,45 +15,52 @@
   <style>
     :root{
       --bg:#0e1116;--panel:#151a22;--panel2:#1b222c;--text:#e8eef9;--muted:#9fb0c6;--accent:#4da3ff;--good:#7ce38b;--warn:#ffca63;--danger:#ff7a7a;
-      --border:#1f2630;
     }
     *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
     body{margin:0;background:linear-gradient(180deg,#0d1117,#0b0e13 50%,#0c1016);color:var(--text)}
 
     /* Header */
-    header{position:sticky;top:0;background:rgba(13,17,23,.85);backdrop-filter: blur(6px);border-bottom:1px solid var(--border);z-index:5}
+    header{position:sticky;top:0;background:rgba(13,17,23,.85);backdrop-filter: blur(6px);border-bottom:1px solid #1f2630;z-index:5}
     header .wrap{display:flex;align-items:center;gap:12px;padding:10px 12px;flex-wrap:wrap}
     h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
     .brandmark{width:20px;height:20px;border-radius:6px;border:1px solid #263040;background:#0f141b;object-fit:contain}
 
     .pill{border:1px solid #2b3442;padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap}
-    .tag{border:1px solid #2b3442;padding:4px 8px;border-radius:999px;color:#c6d5ef;font-size:12px}
+    .hidden{display:none}
+
+    /* Buttons */
     .btn{background:#121823;color:#cfe1fb;border:1px solid #283343;padding:6px 10px;border-radius:10px;font-size:12px;cursor:pointer}
     .btn:hover{border-color:#3a4c66}
-    input[type="text"]{background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:8px;padding:6px;width:180px}
+    .toggle{display:flex;gap:8px}
+    .toggle button{flex:1}
+    .btn-rec{ border-color:#3a2830; }
+    .btn-rec.recording{ background:#2a0f12;border-color:#7a2b2b;color:#ffb9b9; }
+    .pill.recording{ border-color:#7a2b2b;color:#ffb9b9;background:#210d10; }
 
-    /* Grid of channels */
-    .grid{display:grid;grid-template-columns:repeat(7,minmax(260px,1fr));gap:14px;padding:16px}
-    .strip{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px}
+    /* Channel grid */
+    .grid{display:grid;grid-template-columns:repeat(7,minmax(220px,1fr));gap:14px;padding:16px}
+    .strip{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px}
     .strip h3{margin:0 0 4px;font-size:13px;color:#d7e3f8;letter-spacing:.3px}
     .section{background:#0f141b;border:1px solid #212938;border-radius:12px;padding:10px}
     .row{display:flex;align-items:center;gap:8px;margin:6px 0}
     label{font-size:12px;color:#b7c6db}
     input[type="range"]{width:100%}
+    input[type="text"]{background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:8px;padding:6px;width:180px}
 
-    /* Let the label wrap so the slider can be longer (like your reference) */
-    .row{align-items:flex-start}
-    .row label{flex:0 0 90px;line-height:1.2}
-    .row input[type="range"]{flex:1}
-
-    /* Channel meter (taller and visible) */
-    .row .meter{flex:0 0 18px;width:18px;height:140px;border-radius:8px;background:#0b0f15;border:1px solid #243145;position:relative;overflow:hidden}
+    /* Meters */
+    .meter{background:#0b0f15;border:1px solid #243145;border-radius:8px;position:relative;overflow:hidden}
     .meter .bar{position:absolute;bottom:0;left:0;right:0;height:0;background:linear-gradient(180deg,#6be47a 0%,#ffe27a 65%,#ff8b8b 100%);transition:height 60ms linear}
+    .row .meter{flex:0 0 18px;width:18px;height:140px;border-radius:8px}
+    #masterMeter.meter{flex:0 0 22px;width:22px;height:160px;border-radius:10px}
 
-    /* Bottom area: Master + Notes */
-    .master{grid-column:1/-1;display:grid;grid-template-columns:380px 1fr;gap:14px;padding:0 16px 16px}
-    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:16px;padding:12px}
     .small{font-size:11px;color:#93a7c0}
+
+    /* Bottom: Master + Notes */
+    .master{grid-column:1/-1;display:grid;grid-template-columns:380px 1fr;gap:14px;padding:0 16px 16px}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px}
+    .row.inline>*{flex:1}
+    select{width:100%;background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:10px;padding:8px}
+
     .note{font-size:12px;color:#a9bad5}
     .badge{display:inline-flex;align-items:center;gap:6px;background:#0f1620;border:1px solid #293447;color:#c6d5ef;border-radius:999px;padding:6px 10px;font-size:12px}
     .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d131b;border:1px solid #293447;border-bottom-color:#1c2734;padding:2px 6px;border-radius:6px;font-size:11px}
@@ -71,11 +69,11 @@
     .disabled{opacity:.45;pointer-events:none;filter:grayscale(.3)}
 
     @media (max-width: 1200px){
-      .grid{grid-template-columns:repeat(3,minmax(240px,1fr));}
+      .grid{grid-template-columns:repeat(3,minmax(220px,1fr));}
       .master{grid-template-columns:repeat(1,1fr);}
     }
     @media (max-width: 750px){
-      .grid{grid-template-columns:repeat(1,minmax(240px,1fr));}
+      .grid{grid-template-columns:repeat(1,minmax(220px,1fr));}
       .master{grid-template-columns:repeat(1,1fr);}
     }
   </style>
@@ -83,12 +81,14 @@
 <body>
   <header>
     <div class="wrap">
-      <img class="brandmark" src="./icon-192.png" alt="">
+      <img class="brandmark" src="./icon-192.png" alt="Logo">
       <h1>Virtual Mixer Trainer <span class="small">v0.2</span></h1>
       <span class="pill">Load stems • Practice live & studio • 🎷 Sax • Demo/Full lock</span>
+
       <button id="playAll" class="btn">▶ Play All</button>
       <button id="pauseAll" class="btn">⏸ Pause All</button>
-      <button id="recordBtn" class="btn">⏺ Record</button>
+      <button id="recordBtn" class="btn btn-rec">⏺ Record</button>
+      <span id="recTimer" class="pill hidden">00:00</span>
 
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label class="small">Scenario</label>
@@ -99,7 +99,6 @@
           <option value="jazz_sax">Jazz / Sax Solo</option>
         </select>
         <button id="applyScenario" class="btn">Apply</button>
-
         <span class="pill">License: <span id="licenseStatus">DEMO</span></span>
         <input id="licenseInput" type="text" placeholder="Enter license key">
         <button id="activateBtn" class="btn">Activate</button>
@@ -108,10 +107,9 @@
     </div>
   </header>
 
-  <!-- Channels render here -->
   <section class="grid" id="grid"></section>
 
-  <!-- Bottom: Master + Notes -->
+  <!-- Bottom: Master Bus + Notes -->
   <section class="master">
     <div class="card section">
       <h3>Master Bus</h3>
@@ -123,14 +121,13 @@
       </div>
     </div>
 
-    <div class="card section">
+    <div class="card section" style="grid-column:span 1">
       <h3>How to use</h3>
       <div class="note">
-        Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.<br>
-        (Training build — for real sales, verify keys on your server.)
+        Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.
       </div>
-      <h3>Training Notes</h3>
-      <ul class="note">
+      <h3 style="margin-top:10px">Training Notes</h3>
+      <ul class="note" style="margin-left:18px">
         <li><b>Gain staging:</b> Set <span class="kbd">TRIM</span> first.</li>
         <li><b>HPF:</b> Vocals/Sax start 90–120 Hz.</li>
         <li><b>EQ:</b> Clean muddiness (200–400 Hz); presence (2–5 kHz); air (10–12 kHz).</li>
@@ -143,10 +140,16 @@
   </section>
 
   <script>
-  // ================== Audio Engine & UI ==================
+  /* ============================================================
+     Audio Engine + UI (unchanged behaviour, NO autoplay on file)
+     ============================================================ */
+
+  // Audio ctx / master
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const masterGain = ctx.createGain();
   const analyserMaster = ctx.createAnalyser();
+  analyserMaster.fftSize = 1024;
+  analyserMaster.smoothingTimeConstant = 0.85;
   masterGain.connect(analyserMaster).connect(ctx.destination);
 
   // Reverb bus
@@ -154,21 +157,18 @@
   const reverbReturn = ctx.createGain();
   reverbReturn.gain.value = 0.2;
   convolver.connect(reverbReturn).connect(masterGain);
-
   function makeImpulse(seconds=2.2, decay=2.0){
-    const rate = ctx.sampleRate;
-    const len = rate * seconds;
-    const impulse = ctx.createBuffer(2, len, rate);
+    const rate = ctx.sampleRate, len = rate * seconds;
+    const buf = ctx.createBuffer(2, len, rate);
     for(let ch=0; ch<2; ch++){
-      const data = impulse.getChannelData(ch);
-      for(let i=0;i<len;i++){
-        data[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay);
-      }
+      const d = buf.getChannelData(ch);
+      for(let i=0;i<len;i++){ d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay); }
     }
-    return impulse;
+    return buf;
   }
   convolver.buffer = makeImpulse();
 
+  // Channels
   const channelDefs = [
     { id:'voxLead', label:'Lead Vocal' },
     { id:'bgv1',    label:'BGV Left' },
@@ -178,7 +178,6 @@
     { id:'drums',   label:'Drums' },
     { id:'sax',     label:'Saxophone 🎷' },
   ];
-
   const state = { channels:{}, soloAny:false };
 
   function createChannel(def, index){
@@ -187,43 +186,43 @@
     strip.innerHTML = `
       <h3>${def.label}</h3>
       <div class="section">
-        <div class="row"><label>Audio File</label><input type="file" accept="audio/*" data-role="file"></div>
+        <div class="row inline">
+          <label>Audio File</label>
+          <input type="file" accept="audio/*" data-role="file">
+        </div>
         <div class="row"><label>TRIM</label><input data-role="trim" type="range" min="0" max="4" step="0.01" value="1"></div>
-
-        <div class="row"><label>HPF<br><span class="small">Enable</span></label>
-          <input data-role="hpfToggle" type="checkbox" style="flex:0 0 auto;margin-top:4px">
+        <div class="row"><label>HPF</label>
+          <input data-role="hpfToggle" type="checkbox"> <span class="small">Enable</span>
           <input data-role="hpfFreq" type="range" min="20" max="300" step="1" value="100">
         </div>
-
-        <div class="row"><label>EQ Low<br>(shelf)</label><input data-role="eqLow" type="range" min="-12" max="12" step="0.1" value="0"></div>
-        <div class="row"><label>EQ Mid<br>Gain</label><input data-role="eqMidGain" type="range" min="-12" max="12" step="0.1" value="0"></div>
-        <div class="row"><label>EQ Mid<br>Freq</label><input data-role="eqMidFreq" type="range" min="200" max="6000" step="1" value="1500"></div>
-        <div class="row"><label>EQ Mid<br>Q</label><input data-role="eqMidQ" type="range" min="0.2" max="12" step="0.1" value="1.0"></div>
-        <div class="row"><label>EQ High<br>(shelf)</label><input data-role="eqHigh" type="range" min="-12" max="12" step="0.1" value="0"></div>
-
+        <div class="row"><label>EQ Low (shelf)</label><input data-role="eqLow" type="range" min="-12" max="12" step="0.1" value="0"></div>
+        <div class="row"><label>EQ Mid Gain</label><input data-role="eqMidGain" type="range" min="-12" max="12" step="0.1" value="0"></div>
+        <div class="row"><label>EQ Mid Freq</label><input data-role="eqMidFreq" type="range" min="200" max="6000" step="1" value="1500"></div>
+        <div class="row"><label>EQ Mid Q</label><input data-role="eqMidQ" type="range" min="0.2" max="12" step="0.1" value="1.0"></div>
+        <div class="row"><label>EQ High (shelf)</label><input data-role="eqHigh" type="range" min="-12" max="12" step="0.1" value="0"></div>
         <div class="row"><label>Pan</label><input data-role="pan" type="range" min="-1" max="1" step="0.01" value="0"></div>
-        <div class="row"><label>AUX →<br>Reverb</label><input data-role="aux" type="range" min="0" max="1" step="0.01" value="0.2"></div>
+        <div class="row"><label>AUX → Reverb</label><input data-role="aux" type="range" min="0" max="1" step="0.01" value="0.2"></div>
 
-        <div class="row"><label>Compressor<br><span class="small">Enable</span></label><input data-role="compOn" type="checkbox" style="flex:0 0 auto;margin-top:4px"></div>
-        <div class="row"><label>Comp<br>Threshold (dB)</label><input data-role="compThresh" type="range" min="-60" max="0" step="1" value="-24"></div>
-        <div class="row"><label>Comp<br>Ratio</label><input data-role="compRatio" type="range" min="1" max="20" step="0.1" value="3"></div>
-        <div class="row"><label>Comp<br>Attack (s)</label><input data-role="compAttack" type="range" min="0.001" max="0.2" step="0.001" value="0.01"></div>
-        <div class="row"><label>Comp<br>Release (s)</label><input data-role="compRelease" type="range" min="0.02" max="1" step="0.01" value="0.25"></div>
+        <div class="row"><label>Compressor</label><input data-role="compOn" type="checkbox"> <span class="small">Enable</span></div>
+        <div class="row"><label>Comp Threshold (dB)</label><input data-role="compThresh" type="range" min="-60" max="0" step="1" value="-24"></div>
+        <div class="row"><label>Comp Ratio</label><input data-role="compRatio" type="range" min="1" max="20" step="0.1" value="3"></div>
+        <div class="row"><label>Comp Attack (s)</label><input data-role="compAttack" type="range" min="0.001" max="0.2" step="0.001" value="0.01"></div>
+        <div class="row"><label>Comp Release (s)</label><input data-role="compRelease" type="range" min="0.02" max="1" step="0.01" value="0.25"></div>
 
-        <div class="row"><label>Delay<br>(ms)</label><input data-role="delayTime" type="range" min="0" max="600" step="1" value="0"></div>
-        <div class="row"><label>Delay<br>Feedback</label><input data-role="delayFb" type="range" min="0" max="0.95" step="0.01" value="0.3"></div>
-        <div class="row"><label>Delay<br>Mix</label><input data-role="delayMix" type="range" min="0" max="1" step="0.01" value="0"></div>
+        <div class="row"><label>Delay (ms)</label><input data-role="delayTime" type="range" min="0" max="600" step="1" value="0"></div>
+        <div class="row"><label>Delay Feedback</label><input data-role="delayFb" type="range" min="0" max="0.95" step="0.01" value="0.3"></div>
+        <div class="row"><label>Delay Mix</label><input data-role="delayMix" type="range" min="0" max="1" step="0.01" value="0"></div>
 
         <div class="row"><label>Fader</label><input data-role="fader" type="range" min="0" max="1.5" step="0.01" value="1"></div>
         <div class="row"><label>Meter</label><div class="meter" aria-label="channel meter"><div class="bar"></div></div></div>
-        <div class="row" style="gap:8px">
-          <button data-role="mute" class="btn" style="flex:1">Mute</button>
-          <button data-role="solo" class="btn" style="flex:1">Solo</button>
+        <div class="row toggle">
+          <button data-role="mute" class="btn">Mute</button>
+          <button data-role="solo" class="btn">Solo</button>
         </div>
       </div>
     `;
 
-    // Media element (no autoplay on load)
+    // Web Audio nodes per channel
     const media = new Audio();
     media.loop = true;
     media.crossOrigin = 'anonymous';
@@ -245,7 +244,7 @@
     const pan = ctx.createStereoPanner();
     const auxSend = ctx.createGain();
     const postFader = ctx.createGain(); // channel fader
-    const analyser = ctx.createAnalyser(); analyser.fftSize=256;
+    const analyser = ctx.createAnalyser(); analyser.fftSize=1024; analyser.smoothingTimeConstant=0.85;
 
     // Routing
     src.connect(preGain)
@@ -255,13 +254,11 @@
        .connect(eqHigh)
        .connect(compBypass) // bypass path
        .connect(delay);
-    // compressor path (switch)
-    comp.connect(delay);
-    // delay network
-    delay.connect(delayFb).connect(delay);
+    comp.connect(delay); // compressor path
+    delay.connect(delayFb).connect(delay); // feedback
     delay.connect(delayMix);
     const dry = ctx.createGain(); dry.gain.value = 1;
-    compBypass.connect(dry);
+    compBypass.connect(dry); // dry path
     const merger = ctx.createGain();
     dry.connect(merger);
     delayMix.connect(merger);
@@ -290,6 +287,7 @@
       mute: strip.querySelector('[data-role=mute]'),
       solo: strip.querySelector('[data-role=solo]'),
       meter: strip.querySelector('.meter .bar'),
+      // compressor & delay
       compOn: strip.querySelector('[data-role=compOn]'),
       compThresh: strip.querySelector('[data-role=compThresh]'),
       compRatio: strip.querySelector('[data-role=compRatio]'),
@@ -300,19 +298,20 @@
       delayMix: strip.querySelector('[data-role=delayMix]'),
     };
 
-    // UI wiring
+    // File select — NO AUTOPLAY
     ui.file.addEventListener('change', e=>{
       const file = e.target.files?.[0];
       if(!file) return;
       const url = URL.createObjectURL(file);
+      media.autoplay = false;
       media.src = url;
-      // IMPORTANT: do NOT autoplay here; user presses Play All
-      ctx.resume();
+      media.pause();
+      try { media.currentTime = 0; } catch(_) {}
     });
+
+    // UI bindings
     ui.trim.addEventListener('input', ()=> preGain.gain.value = parseFloat(ui.trim.value));
-    ui.hpfToggle.addEventListener('change', ()=>{
-      hpf.frequency.value = ui.hpfToggle.checked ? parseFloat(ui.hpfFreq.value) : 20;
-    });
+    ui.hpfToggle.addEventListener('change', ()=>{ hpf.frequency.value = ui.hpfToggle.checked ? parseFloat(ui.hpfFreq.value) : 20; });
     ui.hpfFreq.addEventListener('input', ()=>{ if(ui.hpfToggle.checked) hpf.frequency.value = parseFloat(ui.hpfFreq.value); });
     ui.eqLow.addEventListener('input', ()=> eqLow.gain.value = parseFloat(ui.eqLow.value));
     ui.eqMidGain.addEventListener('input', ()=> eqMid.gain.value = parseFloat(ui.eqMidGain.value));
@@ -344,83 +343,74 @@
     ui.delayFb.addEventListener('input', ()=> delayFb.gain.value = parseFloat(ui.delayFb.value));
     ui.delayMix.addEventListener('input', ()=> delayMix.gain.value = parseFloat(ui.delayMix.value));
 
-    // meters
-    function drawMeter(){
-      const arr = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(arr);
-      let val = 0; for(const v of arr) val = Math.max(val, v);
-      const pct = val/255;
-      ui.meter.style.height = Math.round(pct*100)+"%";
-      requestAnimationFrame(drawMeter);
-    }
-    drawMeter();
+    // Meter draw
+    (function drawMeter(){
+      const arr = new Uint8Array(analyser.fftSize);
+      function tick(){
+        analyser.getByteTimeDomainData(arr);
+        let sum = 0; for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum += v*v; }
+        const rms = Math.sqrt(sum/arr.length);
+        const pct = Math.min(100, Math.max(0, rms*140));
+        ui.meter.style.height = Math.round(pct)+"%";
+        requestAnimationFrame(tick);
+      }
+      tick();
+    })();
 
-    state.channels[def.id] = { index, def, strip, media, nodes:{src,preGain,hpf,eqLow,eqMid,eqHigh,comp,pan,auxSend,postFader,analyser,delay,delayFb,delayMix,compBypass} , ui };
+    state.channels[def.id] = { index, def, strip, media, nodes:{postFader, eqHigh, comp, compBypass, delay, delayFb, delayMix}, ui };
     return strip;
   }
 
   function updateSoloMute(){
     const anySolo = Object.values(state.channels).some(ch => ch.strip.dataset.solo==='1');
     for(const ch of Object.values(state.channels)){
-      const soloed = ch.strip.dataset.solo==='1';
-      const target = (!anySolo || soloed) ? parseFloat(ch.ui.fader.value) : 0;
+      const isSoloed = ch.strip.dataset.solo==='1';
+      const isMuted  = ch.strip.dataset.muted==='1';
+      const faderVal = parseFloat(ch.ui.fader.value);
+      const target = isMuted ? 0 : ((anySolo && !isSoloed) ? 0 : faderVal);
       ch.nodes.postFader.gain.value = target;
-      ch.ui.mute.textContent = target>0 ? 'Mute' : 'Unmute';
+      ch.ui.mute.textContent = isMuted ? 'Unmute' : 'Mute';
+      ch.ui.solo.textContent = isSoloed ? 'Unsolo' : 'Solo';
     }
   }
 
-  // Build UI grid
   const grid = document.getElementById('grid');
   channelDefs.forEach((def, i) => {
     const strip = createChannel(def, i);
     grid.appendChild(strip);
     const ch = state.channels[def.id];
     ch.ui.mute.addEventListener('click', ()=>{
-      const muted = ch.nodes.postFader.gain.value>0.0001;
-      ch.nodes.postFader.gain.value = muted? 0 : parseFloat(ch.ui.fader.value);
-      ch.ui.mute.textContent = muted? 'Unmute':'Mute';
+      const isMuted = ch.strip.dataset.muted==='1';
+      ch.strip.dataset.muted = isMuted ? '0' : '1';
       updateSoloMute();
     });
     ch.ui.solo.addEventListener('click', ()=>{
-      ch.strip.dataset.solo = ch.strip.dataset.solo==='1' ? '0' : '1';
-      ch.ui.solo.textContent = ch.strip.dataset.solo==='1' ? 'Unsolo' : 'Solo';
+      const isSoloed = ch.strip.dataset.solo==='1';
+      ch.strip.dataset.solo = isSoloed ? '0' : '1';
       updateSoloMute();
     });
   });
 
-  // Master controls
-  const masterFader = document.getElementById('masterFader');
-  const reverbReturnKnob = document.getElementById('reverbReturn');
-  const masterMeterBar = document.querySelector('#masterMeter .bar');
-  masterFader.addEventListener('input', ()=> masterGain.gain.value = parseFloat(masterFader.value));
-  reverbReturnKnob.addEventListener('input', ()=> reverbReturn.gain.value = parseFloat(reverbReturnKnob.value));
-  analyserMaster.fftSize=256;
-  (function drawMaster(){
-    const arr = new Uint8Array(analyserMaster.frequencyBinCount);
-    analyserMaster.getByteFrequencyData(arr);
-    let val = 0; for(const v of arr) val = Math.max(val, v);
-    const pct = val/255;
-    masterMeterBar.style.height = Math.round(pct*100)+"%";
-    requestAnimationFrame(drawMaster);
+  // Master faders
+  document.getElementById('masterFader').addEventListener('input', e=> masterGain.gain.value = parseFloat(e.target.value));
+  document.getElementById('reverbReturn').addEventListener('input', e=> reverbReturn.gain.value = parseFloat(e.target.value));
+
+  // Master meter loop
+  (function masterMeterLoop(){
+    const bar = document.querySelector('#masterMeter .bar');
+    const arr = new Uint8Array(analyserMaster.fftSize);
+    function draw(){
+      analyserMaster.getByteTimeDomainData(arr);
+      let sum=0; for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum+=v*v; }
+      const rms=Math.sqrt(sum/arr.length);
+      const pct = Math.min(100, Math.max(0, rms*140));
+      bar.style.height = Math.round(pct)+"%";
+      requestAnimationFrame(draw);
+    }
+    draw();
   })();
 
-  // Transport
-  document.getElementById('playAll').addEventListener('click', ()=>{
-    ctx.resume();
-    for(const ch of Object.values(state.channels)){
-      if(ch.media.src) ch.media.play().catch(()=>{});
-    }
-  });
-  document.getElementById('pauseAll').addEventListener('click', ()=>{
-    for(const ch of Object.values(state.channels)) ch.media.pause();
-  });
-
-  // Simple “record” placeholder (kept from your earlier build)
-  document.getElementById('recordBtn').addEventListener('click', ()=>{
-    alert('Recording placeholder: implement WebAudio recording if needed.');
-  });
-
-  // Scenarios / Presets (unchanged from earlier)
+  // Preset scenarios (unchanged)
   function applyScenario(name){
     const C = state.channels;
     function set(chId, fn){ if(C[chId]) fn(C[chId].ui); }
@@ -461,43 +451,59 @@
     applyScenario(sel);
   });
 
-  // ================== License (Netlify + Supabase) ==================
+  // Transport
+  document.getElementById('playAll').addEventListener('click', ()=>{
+    ctx.resume();
+    for(const ch of Object.values(state.channels)){
+      if(ch.media.src) ch.media.play().catch(()=>{});
+    }
+  });
+  document.getElementById('pauseAll').addEventListener('click', ()=>{
+    for(const ch of Object.values(state.channels)) ch.media.pause();
+  });
+  window.addEventListener('click', ()=> ctx.resume(), { once:true });
+
+  /* ============================
+     License (Netlify Functions)
+     ============================ */
   const input = document.getElementById('licenseInput');
   const activateBtn = document.getElementById('activateBtn');
   const deactivateBtn = document.getElementById('deactivateBtn');
   const licenseStatus = document.getElementById('licenseStatus');
 
-  window.__isFull = false; // global flag your UI already depends on
-
-  function refreshDemoLocks(){
-    const strips = Array.from(document.querySelectorAll('.strip'));
-    strips.forEach((el, idx)=>{
-      const disabled = !window.__isFull && idx > 2; // only first 3 strips active in demo
-      el.classList.toggle('disabled', disabled);
-    });
-    // limit reverb in demo
-    const rr = document.getElementById('reverbReturn');
-    if(!window.__isFull){ reverbReturn.gain.value = Math.min(0.12, parseFloat(rr.value)); }
-  }
-
-  function setFullMode(on){
-    window.__isFull = !!on;
-    licenseStatus.textContent = on ? 'FULL' : 'DEMO';
-    refreshDemoLocks();
-  }
-
-  // simple "device id" for binding
-  function getDeviceId() {
+  function getDeviceId(){
     let id = localStorage.getItem('vmix_device_id');
-    if (!id) {
-      id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('vmix_device_id', id);
-    }
+    if(!id){ id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('vmix_device_id', id); }
     return id;
   }
-  function saveLicense(key, plan){ localStorage.setItem('vmix_license', JSON.stringify({ key, plan })); }
+  function saveLicense(key, plan){ localStorage.setItem('vmix_license', JSON.stringify({key, plan})); }
   function loadLicense(){ try{ return JSON.parse(localStorage.getItem('vmix_license')||'null'); }catch{ return null; } }
   function clearLicense(){ localStorage.removeItem('vmix_license'); }
+
+  function applyFullMode(enabled){
+    window.__isFull = !!enabled;
+    licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
+
+    // demo lock: only first 3 channels interact/play
+    const strips = Array.from(document.querySelectorAll('.strip'));
+    strips.forEach((el, idx)=>{
+      const disabled = !enabled && idx > 2;
+      el.classList.toggle('disabled', disabled);
+
+      const ch = Object.values(state.channels)[idx];
+      if (ch) {
+        // Silence disabled channels and pause their media
+        ch.nodes.postFader.gain.value = disabled ? 0 : parseFloat(ch.ui.fader.value);
+        if (disabled) ch.media.pause();
+      }
+    });
+
+    // reverb cap in demo
+    if(!enabled){
+      const rr = document.getElementById('reverbReturn');
+      reverbReturn.gain.value = Math.min(0.12, parseFloat(rr.value||'0.12'));
+    }
+  }
 
   async function verifyKey(key){
     const res = await fetch(`/.netlify/functions/verify?key=${encodeURIComponent(key)}`, { headers:{'Cache-Control':'no-cache'} });
@@ -505,40 +511,51 @@
   }
   async function activateKey(key, deviceId){
     const res = await fetch('/.netlify/functions/activate', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ key, deviceId })
-    }); return res.json();
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ key, deviceId })
+    });
+    return res.json();
   }
   async function deactivateKey(key, deviceId){
     const res = await fetch('/.netlify/functions/deactivate', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ key, deviceId })
-    }); return res.json();
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ key, deviceId })
+    });
+    return res.json();
   }
 
-  // restore on load
-  (async function boot(){
+  // Restore license on load
+  (async function bootstrap(){
     const saved = loadLicense();
-    if(!saved?.key){ setFullMode(false); return; }
+    if(!saved?.key){ applyFullMode(false); return; }
     try{
       const check = await verifyKey(saved.key);
-      setFullMode(!!check?.valid);
-      if(!check?.valid) clearLicense();
-    }catch{ setFullMode(!!saved?.key); }
+      applyFullMode(!!check.valid);
+      if(!check.valid) clearLicense();
+    }catch{
+      // if API unreachable, keep last state
+      applyFullMode(!!saved?.key);
+    }
   })();
 
   activateBtn.addEventListener('click', async ()=>{
-    const key = (input?.value||'').trim();
+    const key = (input.value||'').trim();
     if(!key){ alert('Please enter your license key.'); return; }
     activateBtn.disabled = true; activateBtn.textContent = 'Checking…';
     try{
-      const verify = await verifyKey(key);
-      if(!verify.valid){ alert('Key not valid: ' + (verify.reason||'unknown')); setFullMode(false); return; }
-      const act = await activateKey(key, getDeviceId());
-      if(act?.ok === false){ alert('Activation error: ' + (act.reason||'unknown')); setFullMode(false); return; }
-      saveLicense(key, verify.plan||'full');
-      setFullMode(true);
+      const v = await verifyKey(key);
+      if(!v.valid){ alert('Key not valid: ' + (v.reason || 'unknown')); applyFullMode(false); return; }
+      const deviceId = getDeviceId();
+      const a = await activateKey(key, deviceId);
+      if(a.ok === false){ alert('Activation error: ' + (a.reason || 'unknown')); applyFullMode(false); return; }
+      saveLicense(key, v.plan || 'full');
+      applyFullMode(true);
       alert('License activated. Full features unlocked.');
-    }catch(e){ console.error(e); alert('Network error while activating.'); }
-    finally{ activateBtn.disabled=false; activateBtn.textContent='Activate'; }
+    }catch(e){
+      console.error(e); alert('Network error while activating. Please try again.');
+    }finally{
+      activateBtn.disabled = false; activateBtn.textContent = 'Activate';
+    }
   });
 
   deactivateBtn.addEventListener('click', async ()=>{
@@ -547,393 +564,51 @@
       try{ await deactivateKey(saved.key, getDeviceId()); }catch{}
     }
     clearLicense();
-    setFullMode(false);
-    alert('License removed. Back to demo mode.');
-  });
-
-  // initial locks (demo)
-  refreshDemoLocks();
-
-  // unlock audio on first gesture
-  window.addEventListener('click', ()=> ctx.resume(), { once:true });
-  </script>
-
-  <noscript>
-    <div style="max-width:1200px;margin:16px auto;background:#211616;border:1px solid #3b2323;color:#f1cccc;padding:12px;border-radius:12px">
-      This app requires JavaScript to run. Please enable JavaScript in your browser.
-    </div>
-  </noscript>
-</body>
-</html>
-
-  <link rel="apple-touch-icon" href="./apple-touch-icon.png" sizes="180x180">
-
-  <style>
-    :root{
-      --bg:#0e1116;--panel:#151a22;--panel2:#1b222c;--text:#e8eef9;--muted:#9fb0c6;--accent:#4da3ff;--good:#7ce38b;--warn:#ffca63;--danger:#ff7a7a;
-    }
-    *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    body{margin:0;background:linear-gradient(180deg,#0d1117,#0b0e13 50%,#0c1016);color:var(--text)}
-
-    /* Header (same layout) */
-    header{position:sticky;top:0;background:rgba(13,17,23,.85);backdrop-filter: blur(6px);border-bottom:1px solid #1f2630;z-index:5}
-    header .wrap{display:flex;align-items:center;gap:12px;padding:10px 12px;flex-wrap:wrap}
-    h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
-    .brandmark{width:20px;height:20px;border-radius:6px;border:1px solid #263040;background:#0f141b;object-fit:contain}
-
-    .pill{border:1px solid #2b3442;padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px;white-space:nowrap}
-    .hidden{display:none}
-
-    /* Buttons */
-    .btn{background:#121823;color:#cfe1fb;border:1px solid #283343;padding:6px 10px;border-radius:10px;font-size:12px;cursor:pointer}
-    .btn:hover{border-color:#3a4c66}
-    .toggle{display:flex;gap:8px}
-    .toggle button{flex:1}
-    /* Record button state */
-    .btn-rec{ border-color:#3a2830; }
-    .btn-rec.recording{ background:#2a0f12;border-color:#7a2b2b;color:#ffb9b9; }
-    .pill.recording{ border-color:#7a2b2b;color:#ffb9b9;background:#210d10; }
-
-    /* Channel grid (like your first script) */
-    .grid{display:grid;grid-template-columns:repeat(7,minmax(220px,1fr));gap:14px;padding:16px}
-    .strip{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px}
-    .strip h3{margin:0 0 4px;font-size:13px;color:#d7e3f8;letter-spacing:.3px}
-    .section{background:#0f141b;border:1px solid #212938;border-radius:12px;padding:10px}
-    .row{display:flex;align-items:center;gap:8px;margin:6px 0}
-    label{font-size:12px;color:#b7c6db}
-    input[type="range"]{width:100%}
-    input[type="text"]{background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:8px;padding:6px;width:180px}
-
-    /* METERS: bigger + clearer */
-    .meter{background:#0b0f15;border:1px solid #243145;border-radius:8px;position:relative;overflow:hidden}
-    .meter .bar{position:absolute;bottom:0;left:0;right:0;height:0;background:linear-gradient(180deg,#6be47a 0%,#ffe27a 65%,#ff8b8b 100%);transition:height 60ms linear}
-    /* Channel meters inside rows */
-    .row .meter{flex:0 0 18px;width:18px;height:140px;border-radius:8px}
-    /* Master meter larger */
-    #masterMeter.meter{flex:0 0 22px;width:22px;height:160px;border-radius:10px}
-
-    .small{font-size:11px;color:#93a7c0}
-
-    /* Bottom: Master + Notes */
-    .master{grid-column:1/-1;display:grid;grid-template-columns:380px 1fr;gap:14px;padding:0 16px 16px}
-    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid #1f2630;border-radius:16px;padding:12px}
-    .row.inline>*{flex:1}
-    select{width:100%;background:#0c1117;color:var(--text);border:1px solid #233042;border-radius:10px;padding:8px}
-
-    .note{font-size:12px;color:#a9bad5}
-    .badge{display:inline-flex;align-items:center;gap:6px;background:#0f1620;border:1px solid #293447;color:#c6d5ef;border-radius:999px;padding:6px 10px;font-size:12px}
-    .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0d131b;border:1px solid #293447;border-bottom-color:#1c2734;padding:2px 6px;border-radius:6px;font-size:11px}
-    .foot{display:flex;gap:8px;flex-wrap:wrap}
-
-    .disabled{opacity:.45;pointer-events:none;filter:grayscale(.3)}
-
-    @media (max-width: 1200px){
-      .grid{grid-template-columns:repeat(3,minmax(220px,1fr));}
-      .master{grid-template-columns:repeat(1,1fr);}
-    }
-    @media (max-width: 750px){
-      .grid{grid-template-columns:repeat(1,minmax(220px,1fr));}
-      .master{grid-template-columns:repeat(1,1fr);}
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="wrap">
-      <!-- brand icon beside the title -->
-      <img class="brandmark" src="./favicon.svg" alt="Logo">
-      <h1>Virtual Mixer Trainer <span class="small">v0.2</span></h1>
-      <span class="pill">Load stems • Practice live & studio • 🎷 Sax • Demo/Full lock</span>
-
-      <button id="playAll" class="btn">▶ Play All</button>
-      <button id="pauseAll" class="btn">⏸ Pause All</button>
-      <button id="recordBtn" class="btn btn-rec">⏺ Record</button>
-      <span id="recTimer" class="pill hidden">00:00</span>
-
-      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <label class="small">Scenario</label>
-        <select id="scenario">
-          <option value="none">— None (manual) —</option>
-          <option value="worship_live">Worship Band (Live)</option>
-          <option value="studio_pop">Pop Vocals (Studio)</option>
-          <option value="jazz_sax">Jazz / Sax Solo</option>
-        </select>
-        <button id="applyScenario" class="btn">Apply</button>
-        <span class="pill">License: <span id="licenseStatus">DEMO</span></span>
-        <input id="licenseInput" type="text" placeholder="Enter license key">
-        <button id="activateBtn" class="btn">Activate</button>
-        <!-- added: deactivate button -->
-        <button id="deactivateBtn" class="btn">Deactivate</button>
-      </div>
-    </div>
-  </header>
-
-  <section class="grid" id="grid"></section>
-
-  <!-- Bottom: Master Bus + How to use / Notes -->
-  <section class="master">
-    <div class="card section">
-      <h3>Master Bus</h3>
-      <div class="row"><label>Master Fader</label><input id="masterFader" type="range" min="0" max="1.5" step="0.01" value="1"></div>
-      <div class="row"><label>Reverb Return</label><input id="reverbReturn" type="range" min="0" max="1" step="0.01" value="0.2"></div>
-      <div class="row"><label>Master Meter</label><div id="masterMeter" class="meter" aria-label="master meter"><div class="bar"></div></div></div>
-      <div class="row foot">
-        <span class="badge">Tip: Peaks ~ -6 dBFS. Avoid red.</span>
-      </div>
-    </div>
-
-    <div class="card section" style="grid-column:span 1">
-      <h3>How to use</h3>
-      <div class="note">
-        Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.
-      </div>
-      <h3 style="margin-top:10px">Training Notes</h3>
-      <ul class="note" style="margin-left:18px">
-        <li><b>Gain staging:</b> Set <span class="kbd">TRIM</span> first.</li>
-        <li><b>HPF:</b> Vocals/Sax start 90–120 Hz.</li>
-        <li><b>EQ:</b> Clean muddiness (200–400 Hz); presence (2–5 kHz); air (10–12 kHz).</li>
-        <li><b>Pan:</b> Lead center; BGVs L/R; sax slightly off-center.</li>
-        <li><b>Aux/Reverb:</b> Less in live to reduce feedback.</li>
-        <li><b>Compressor:</b> Ratio 2–3:1, medium attack/release.</li>
-        <li><b>Delay:</b> Slap (90–140 ms) for sax/vocals in studio.</li>
-      </ul>
-    </div>
-  </section>
-
-  <script>
-(() => {
-  // ====== BASIC DOM HOOKS (use your existing IDs) ======
-  const input          = document.getElementById('licenseInput');
-  const activateBtn    = document.getElementById('activateBtn');
-  const deactivateBtn  = document.getElementById('deactivateBtn'); // make sure this button exists in your header
-  const licenseStatus  = document.getElementById('licenseStatus');
-  const playAllBtnOrig = document.getElementById('playAll');
-  const pauseAllBtn    = document.getElementById('pauseAll');
-
-  // If you don't already have a Deactivate button in HTML, add:
-  // <button id="deactivateBtn" class="btn">Deactivate</button>
-
-  // ====== GLOBAL AUDIO CONTEXT HOOKS (we reuse your existing ones if present) ======
-  // These are only *read* here; your main audio code should already define them.
-  const ctx           = window.ctx;
-  const state         = window.state || { channels:{} };
-  const reverbReturn  = window.reverbReturn;
-
-  // ====== APP STATE ======
-  // Respect an existing global isFull flag if you already define it; otherwise create it.
-  if (typeof window.isFull === 'undefined') window.isFull = false;
-
-  // A super-small "device id" persisted to tie activations to a browser/device
-  function getDeviceId() {
-    let id = localStorage.getItem('vmix_device_id');
-    if (!id) {
-      id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('vmix_device_id', id);
-    }
-    return id;
-  }
-
-  // Persisted license
-  function saveLicense(key, plan) {
-    localStorage.setItem('vmix_license', JSON.stringify({ key, plan }));
-  }
-  function loadLicense() {
-    try { return JSON.parse(localStorage.getItem('vmix_license') || 'null'); }
-    catch { return null; }
-  }
-  function clearLicense() {
-    localStorage.removeItem('vmix_license');
-  }
-
-  // ====== NETLIFY FUNCTION HELPERS (Server) ======
-  async function verifyKey(key) {
-    const url = `/.netlify/functions/verify?key=${encodeURIComponent(key)}`;
-    const res = await fetch(url, { headers: { 'Cache-Control':'no-cache' }});
-    return res.json();
-  }
-  async function activateKey(key, deviceId) {
-    const res = await fetch('/.netlify/functions/activate', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ key, deviceId })
-    });
-    return res.json();
-  }
-  async function deactivateKey(key, deviceId) {
-    const res = await fetch('/.netlify/functions/deactivate', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ key, deviceId })
-    });
-    return res.json();
-  }
-
-  // ====== DEMO LOCKS ======
-  function isStripLocked(idx){ return !window.isFull && idx > 2; } // only first 3 strips active in demo
-
-  // Make this robust and idempotent (safe to call many times)
-  function refreshDemoLocks(){
-    const strips = Array.from(document.querySelectorAll('.strip'));
-
-    strips.forEach((el, idx) => {
-      const locked = isStripLocked(idx);
-      el.classList.toggle('disabled', locked);
-
-      // Disable all interactive controls
-      el.querySelectorAll('input, button, select').forEach(ctrl => {
-        ctrl.disabled = locked;
-      });
-
-      // If a channel exists in your state, also mark + silence it
-      const chId = Object.keys(state.channels)[idx];
-      const ch   = state.channels[chId];
-      if (ch){
-        ch.locked = locked;
-        if (locked){
-          try { ch.media.pause(); } catch {}
-          try { ch.nodes?.postFader && (ch.nodes.postFader.gain.value = 0); } catch {}
-        }
-      }
-    });
-
-    // (Optional) limit reverb in demo
-    const rrEl = document.getElementById('reverbReturn');
-    if (!window.isFull && rrEl && reverbReturn){
-      const cap = 0.20;
-      if (parseFloat(rrEl.value) > cap){
-        rrEl.value = cap;
-        try { reverbReturn.gain.value = cap; } catch {}
-      }
-    }
-  }
-
-  // ====== FULL / DEMO MODE APPLY ======
-  function applyFullMode(enabled){
-    window.isFull = !!enabled;
-    if (licenseStatus) licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
-    // If your old code also uses this name, we keep it identical:
-    refreshDemoLocks();
-  }
-
-  // Expose for any of your other code that may call it
-  window.refreshDemoLocks = refreshDemoLocks;
-  window.applyFullMode    = applyFullMode;
-
-  // ====== ENSURE PLAY ONLY UNLOCKED STRIPS ======
-  // Safely replace Play All button to remove any previous listeners
-  if (playAllBtnOrig) {
-    const playAllBtn = playAllBtnOrig.cloneNode(true);
-    playAllBtnOrig.parentNode.replaceChild(playAllBtn, playAllBtnOrig);
-    playAllBtn.addEventListener('click', ()=>{
-      if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch {} }
-      for (const ch of Object.values(state.channels)){
-        if (!ch?.locked && ch?.media?.src){
-          try { ch.media.play().catch(()=>{}); } catch {}
-        }
-      }
-    });
-  }
-
-  // Pause All is usually fine as-is; if you want to ensure it pauses everything:
-  if (pauseAllBtn && !pauseAllBtn._vmixBound){
-    pauseAllBtn._vmixBound = true;
-    pauseAllBtn.addEventListener('click', ()=>{
-      for (const ch of Object.values(state.channels)){
-        try { ch.media.pause(); } catch {}
-      }
-    });
-  }
-
-  // ====== BOOTSTRAP (auto-restore license on load) ======
-  (async function bootstrapLicense(){
-    const saved = loadLicense();
-    if (!saved?.key) { applyFullMode(false); return; }
-    try {
-      const res = await verifyKey(saved.key);
-      if (res.valid) {
-        applyFullMode(true);
-      } else {
-        clearLicense();
-        applyFullMode(false);
-      }
-    } catch {
-      // If server is unreachable, keep last known state (best effort)
-      applyFullMode(!!saved?.key);
-    }
-  })();
-
-  // ====== ACTIVATE / DEACTIVATE BUTTONS ======
-  activateBtn?.addEventListener('click', async ()=>{
-    const key = (input?.value || '').trim();
-    if (!key) { alert('Please enter your license key.'); return; }
-
-    activateBtn.disabled = true;
-    const oldText = activateBtn.textContent;
-    activateBtn.textContent = 'Checking…';
-
-    try {
-      const vr = await verifyKey(key);
-      if (!vr.valid) {
-        alert('Key not valid: ' + (vr.reason || 'unknown'));
-        applyFullMode(false);
-        return;
-      }
-
-      const deviceId = getDeviceId();
-      const act = await activateKey(key, deviceId);
-      if (act.ok === false) {
-        alert('Activation error: ' + (act.reason || 'unknown'));
-        applyFullMode(false);
-        return;
-      }
-
-      saveLicense(key, vr.plan || 'full');
-      applyFullMode(true);
-      alert('License activated. Full features unlocked.');
-    } catch (e) {
-      console.error(e);
-      alert('Network error while activating. Please try again.');
-    } finally {
-      activateBtn.disabled = false;
-      activateBtn.textContent = oldText;
-    }
-  });
-
-  deactivateBtn?.addEventListener('click', async ()=>{
-    const saved = loadLicense();
-    // Best-effort server notify
-    try {
-      if (saved?.key) {
-        const deviceId = getDeviceId();
-        await deactivateKey(saved.key, deviceId);
-      }
-    } catch {}
-    clearLicense();
     applyFullMode(false);
     alert('License removed. You are back in demo mode.');
   });
 
-  // ====== OPTIONAL: PREVENT AUTO-PLAY ON FILE LOAD (if your original did auto-play) ======
-  // If your original on file-change does "media.play()", comment it there.
-  // This guard stops "Play All" from starting locked strips even if a file was just loaded.
-  document.addEventListener('change', (e)=>{
-    const input = e.target;
-    if (input && input.matches('input[type="file"]')){
-      // Find which strip this file input belongs to and prevent auto-start if locked
-      const strip = input.closest('.strip');
-      if (!strip) return;
-      const allStrips = Array.from(document.querySelectorAll('.strip'));
-      const idx = allStrips.indexOf(strip);
-      if (isStripLocked(idx)) {
-        // If your code starts playback immediately after load, this ensures it gets paused.
-        // (We do not interfere with your file URL assignment.)
-        const chId = Object.keys(state.channels)[idx];
-        const ch   = state.channels[chId];
-        if (ch?.media) { try { ch.media.pause(); } catch {} }
-      }
+  /* ============================
+     Recording (unchanged)
+     ============================ */
+  const recDest = ctx.createMediaStreamDestination(); masterGain.connect(recDest);
+  const recBtn = document.getElementById('recordBtn'); const recTimer = document.getElementById('recTimer');
+  let mediaRecorder=null, recChunks=[], recStartTime=0, recTimerId=null;
+  const canRecord = typeof MediaRecorder!=='undefined' && MediaRecorder.isTypeSupported
+    ? (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') || MediaRecorder.isTypeSupported('audio/webm'))
+    : false;
+  function formatTime(ms){ const s=Math.floor(ms/1000), m=Math.floor(s/60), ss=(s%60).toString().padStart(2,'0'); return `${m}:${ss}`; }
+  function startTimer(){ recStartTime=performance.now(); recTimer.classList.remove('hidden'); recTimer.classList.add('recording'); recTimer.textContent='00:00'; recTimerId=setInterval(()=>{recTimer.textContent=formatTime(performance.now()-recStartTime)},250); }
+  function stopTimer(){ if(recTimerId){clearInterval(recTimerId); recTimerId=null;} recTimer.classList.remove('recording'); }
+  function startRecording(){
+    ctx.resume();
+    const mime = (typeof MediaRecorder!=='undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(recDest.stream, { mimeType: mime, audioBitsPerSecond: 128000 });
+    recChunks=[]; mediaRecorder.ondataavailable = e=>{ if(e.data && e.data.size>0) recChunks.push(e.data); };
+    mediaRecorder.onstop = ()=>{
+      stopTimer();
+      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      a.href = url; a.download = `VirtualMixer_${ts}.webm`; document.body.appendChild(a); a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },100);
+      recBtn.textContent='⏺ Record'; recBtn.classList.remove('recording');
+    };
+    mediaRecorder.start(250); startTimer(); recBtn.textContent='■ Stop'; recBtn.classList.add('recording');
+  }
+  function stopRecording(){ if(mediaRecorder && mediaRecorder.state!=='inactive'){ mediaRecorder.stop(); } }
+  recBtn.addEventListener('click', ()=>{
+    if(!canRecord){ alert('Recording is not supported in this browser. Use Chrome/Edge/Brave on desktop.'); return; }
+    if(!mediaRecorder || mediaRecorder.state==='inactive'){ startRecording(); } else { stopRecording(); }
+  });
+
+  // Service worker (guarded for Electron)
+  (function registerSWIfWeb(){
+    const isElectron = !!(window && window.process && window.process.versions && window.process.versions.electron);
+    if ('serviceWorker' in navigator && !isElectron) {
+      window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js'); });
     }
-  }, true);
-})();
-</script>
+  })();
+  </script>
 </body>
 </html>
