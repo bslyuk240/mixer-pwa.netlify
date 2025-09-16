@@ -143,546 +143,239 @@
   </section>
 
   <script>
-  /* ===== LICENSE (server-based; minimal change to your structure) ===== */
-  (() => {
-    const input = document.getElementById('licenseInput');
-    const activateBtn = document.getElementById('activateBtn');
-    const deactivateBtn = document.getElementById('deactivateBtn');
-    const licenseStatus = document.getElementById('licenseStatus');
+(() => {
+  // ====== BASIC DOM HOOKS (use your existing IDs) ======
+  const input          = document.getElementById('licenseInput');
+  const activateBtn    = document.getElementById('activateBtn');
+  const deactivateBtn  = document.getElementById('deactivateBtn'); // make sure this button exists in your header
+  const licenseStatus  = document.getElementById('licenseStatus');
+  const playAllBtnOrig = document.getElementById('playAll');
+  const pauseAllBtn    = document.getElementById('pauseAll');
 
-    // Keep your global flag + locks
-    let isFull = false;
-    function applyFullMode(enabled){
-      isFull = enabled;
-      licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
-      if (typeof refreshDemoLocks === 'function') refreshDemoLocks();
+  // If you don't already have a Deactivate button in HTML, add:
+  // <button id="deactivateBtn" class="btn">Deactivate</button>
+
+  // ====== GLOBAL AUDIO CONTEXT HOOKS (we reuse your existing ones if present) ======
+  // These are only *read* here; your main audio code should already define them.
+  const ctx           = window.ctx;
+  const state         = window.state || { channels:{} };
+  const reverbReturn  = window.reverbReturn;
+
+  // ====== APP STATE ======
+  // Respect an existing global isFull flag if you already define it; otherwise create it.
+  if (typeof window.isFull === 'undefined') window.isFull = false;
+
+  // A super-small "device id" persisted to tie activations to a browser/device
+  function getDeviceId() {
+    let id = localStorage.getItem('vmix_device_id');
+    if (!id) {
+      id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('vmix_device_id', id);
     }
-
-    // Simple device id for activations
-    function getDeviceId(){
-      let id = localStorage.getItem('vmix_device_id');
-      if(!id){ id = 'dev-'+Math.random().toString(36).slice(2)+Date.now().toString(36);
-        localStorage.setItem('vmix_device_id', id);
-      }
-      return id;
-    }
-
-    // Persist license
-    function saveLicense(key, plan){ localStorage.setItem('vmix_license', JSON.stringify({key, plan})); }
-    function loadLicense(){ try { return JSON.parse(localStorage.getItem('vmix_license')||'null'); } catch {return null;} }
-    function clearLicense(){ localStorage.removeItem('vmix_license'); }
-
-    // Netlify functions
-    async function verifyKey(key){
-      const url = '/.netlify/functions/verify?key='+encodeURIComponent(key);
-      const res = await fetch(url, { headers: {'Cache-Control':'no-cache'} });
-      return res.json(); // {valid, plan}
-    }
-    async function activateKey(key, deviceId){
-      const res = await fetch('/.netlify/functions/activate', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ key, deviceId })
-      });
-      return res.json(); // {ok}
-    }
-    async function deactivateKey(key, deviceId){
-      const res = await fetch('/.netlify/functions/deactivate', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ key, deviceId })
-      });
-      return res.json(); // {ok}
-    }
-
-    // Auto-restore if previously activated
-    (async function bootstrap(){
-      const saved = loadLicense();
-      if(!saved?.key){ applyFullMode(false); return; }
-      try {
-        const v = await verifyKey(saved.key);
-        if(v.valid){ applyFullMode(true); }
-        else { clearLicense(); applyFullMode(false); }
-      } catch {
-        // if offline, keep last state
-        applyFullMode(!!saved?.key);
-      }
-    })();
-
-    // Activate click
-    activateBtn?.addEventListener('click', async ()=>{
-      const key = (input?.value || '').trim();
-      if(!key){ alert('Please enter your license key.'); return; }
-
-      activateBtn.disabled = true;
-      activateBtn.textContent = 'Checking…';
-      try {
-        const v = await verifyKey(key);
-        if(!v.valid){ alert('Key not valid: '+(v.reason||'unknown')); applyFullMode(false); return; }
-        const dev = getDeviceId();
-        const act = await activateKey(key, dev);
-        if(act.ok === false){ alert('Activation error: '+(act.reason||'unknown')); applyFullMode(false); return; }
-        saveLicense(key, v.plan||'full');
-        applyFullMode(true);
-        alert('License activated. Full features unlocked.');
-      } catch(e){
-        console.error(e); alert('Network error while activating.');
-      } finally {
-        activateBtn.disabled = false;
-        activateBtn.textContent = 'Activate';
-      }
-    });
-
-    // Deactivate click
-    deactivateBtn?.addEventListener('click', async ()=>{
-      const saved = loadLicense();
-      if(saved?.key){
-        try { await deactivateKey(saved.key, getDeviceId()); } catch {}
-      }
-      clearLicense();
-      applyFullMode(false);
-      alert('License removed. You are back in demo mode.');
-    });
-  })();
-  </script>
-
-  <script>
-  // ===== Audio Engine =====
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const masterGain = ctx.createGain();
-  const analyserMaster = ctx.createAnalyser();
-  analyserMaster.fftSize = 1024;
-  analyserMaster.smoothingTimeConstant = 0.85;
-  masterGain.connect(analyserMaster).connect(ctx.destination);
-
-  // Reverb bus
-  const convolver = ctx.createConvolver();
-  const reverbReturn = ctx.createGain();
-  reverbReturn.gain.value = 0.2;
-  convolver.connect(reverbReturn).connect(masterGain);
-
-  function makeImpulse(seconds=2.2, decay=2.0){
-    const rate = ctx.sampleRate;
-    const len = rate * seconds;
-    const impulse = ctx.createBuffer(2, len, rate);
-    for(let ch=0; ch<2; ch++){
-      const data = impulse.getChannelData(ch);
-      for(let i=0;i<len;i++){
-        data[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay);
-      }
-    }
-    return impulse;
-  }
-  convolver.buffer = makeImpulse();
-
-  const channelDefs = [
-    { id:'voxLead', label:'Lead Vocal' },
-    { id:'bgv1',    label:'BGV Left' },
-    { id:'bgv2',    label:'BGV Right' },
-    { id:'gtr',     label:'Guitar' },
-    { id:'keys',    label:'Keys' },
-    { id:'drums',   label:'Drums' },
-    { id:'sax',     label:'Saxophone 🎷' },
-  ];
-
-  const state = { channels:{}, soloAny:false };
-
-  function createChannel(def, index){
-    const strip = document.createElement('div');
-    strip.className='strip';
-    strip.innerHTML = `
-      <h3>${def.label}</h3>
-      <div class="section">
-        <div class="row inline">
-          <label>Audio File</label>
-          <input type="file" accept="audio/*" data-role="file">
-        </div>
-        <div class="row"><label>TRIM</label><input data-role="trim" type="range" min="0" max="4" step="0.01" value="1"></div>
-        <div class="row"><label>HPF</label>
-          <input data-role="hpfToggle" type="checkbox"> <span class="small">Enable</span>
-          <input data-role="hpfFreq" type="range" min="20" max="300" step="1" value="100">
-        </div>
-        <div class="row"><label>EQ Low (shelf)</label><input data-role="eqLow" type="range" min="-12" max="12" step="0.1" value="0"></div>
-        <div class="row"><label>EQ Mid Gain</label><input data-role="eqMidGain" type="range" min="-12" max="12" step="0.1" value="0"></div>
-        <div class="row"><label>EQ Mid Freq</label><input data-role="eqMidFreq" type="range" min="200" max="6000" step="1" value="1500"></div>
-        <div class="row"><label>EQ Mid Q</label><input data-role="eqMidQ" type="range" min="0.2" max="12" step="0.1" value="1.0"></div>
-        <div class="row"><label>EQ High (shelf)</label><input data-role="eqHigh" type="range" min="-12" max="12" step="0.1" value="0"></div>
-        <div class="row"><label>Pan</label><input data-role="pan" type="range" min="-1" max="1" step="0.01" value="0"></div>
-        <div class="row"><label>AUX → Reverb</label><input data-role="aux" type="range" min="0" max="1" step="0.01" value="0.2"></div>
-
-        <div class="row"><label>Compressor</label><input data-role="compOn" type="checkbox"> <span class="small">Enable</span></div>
-        <div class="row"><label>Comp Threshold (dB)</label><input data-role="compThresh" type="range" min="-60" max="0" step="1" value="-24"></div>
-        <div class="row"><label>Comp Ratio</label><input data-role="compRatio" type="range" min="1" max="20" step="0.1" value="3"></div>
-        <div class="row"><label>Comp Attack (s)</label><input data-role="compAttack" type="range" min="0.001" max="0.2" step="0.001" value="0.01"></div>
-        <div class="row"><label>Comp Release (s)</label><input data-role="compRelease" type="range" min="0.02" max="1" step="0.01" value="0.25"></div>
-
-        <div class="row"><label>Delay (ms)</label><input data-role="delayTime" type="range" min="0" max="600" step="1" value="0"></div>
-        <div class="row"><label>Delay Feedback</label><input data-role="delayFb" type="range" min="0" max="0.95" step="0.01" value="0.3"></div>
-        <div class="row"><label>Delay Mix</label><input data-role="delayMix" type="range" min="0" max="1" step="0.01" value="0"></div>
-
-        <div class="row"><label>Fader</label><input data-role="fader" type="range" min="0" max="1.5" step="0.01" value="1"></div>
-        <div class="row"><label>Meter</label><div class="meter" aria-label="channel meter"><div class="bar"></div></div></div>
-        <div class="row toggle">
-          <button data-role="mute" class="btn">Mute</button>
-          <button data-role="solo" class="btn">Solo</button>
-        </div>
-      </div>
-    `;
-
-    // Web Audio nodes per channel
-    const media = new Audio();
-    media.loop = true;
-    media.crossOrigin = 'anonymous';
-    media.preload = 'auto';
-
-    const src = ctx.createMediaElementSource(media);
-    const preGain = ctx.createGain(); // TRIM
-    const hpf = ctx.createBiquadFilter(); hpf.type='highpass'; hpf.frequency.value=100; hpf.Q.value=0.707;
-    const eqLow = ctx.createBiquadFilter(); eqLow.type='lowshelf'; eqLow.frequency.value=100;
-    const eqMid = ctx.createBiquadFilter(); eqMid.type='peaking'; eqMid.frequency.value=1500; eqMid.Q.value=1.0;
-    const eqHigh = ctx.createBiquadFilter(); eqHigh.type='highshelf'; eqHigh.frequency.value=8000;
-    const comp = ctx.createDynamicsCompressor(); comp.threshold.value=-24; comp.ratio.value=3; comp.attack.value=0.01; comp.release.value=0.25;
-    let compBypass = ctx.createGain(); compBypass.gain.value = 1;
-
-    const delay = ctx.createDelay(1.0); delay.delayTime.value = 0.0;
-    const delayFb = ctx.createGain(); delayFb.gain.value = 0.3;
-    const delayMix = ctx.createGain(); delayMix.gain.value = 0.0;
-
-    const pan = ctx.createStereoPanner();
-    const auxSend = ctx.createGain();
-    const postFader = ctx.createGain(); // channel fader
-    const analyser = ctx.createAnalyser(); analyser.fftSize=1024; analyser.smoothingTimeConstant=0.85;
-
-    // Routing
-    src.connect(preGain)
-       .connect(hpf)
-       .connect(eqLow)
-       .connect(eqMid)
-       .connect(eqHigh)
-       .connect(compBypass) // bypass path
-       .connect(delay);
-    // compressor path (switch)
-    comp.connect(delay);
-    // delay network
-    delay.connect(delayFb).connect(delay); // feedback loop
-    delay.connect(delayMix);
-    const dry = ctx.createGain(); dry.gain.value = 1;
-    compBypass.connect(dry); // dry path before delay
-    const merger = ctx.createGain(); // sum dry + wet
-    dry.connect(merger);
-    delayMix.connect(merger);
-
-    merger.connect(pan)
-          .connect(postFader)
-          .connect(analyser)
-          .connect(masterGain);
-
-    // Aux reverb tap post-EQ
-    eqHigh.connect(auxSend).connect(convolver);
-
-    const ui = {
-      file: strip.querySelector('[data-role=file]'),
-      trim: strip.querySelector('[data-role=trim]'),
-      hpfToggle: strip.querySelector('[data-role=hpfToggle]'),
-      hpfFreq: strip.querySelector('[data-role=hpfFreq]'),
-      eqLow: strip.querySelector('[data-role=eqLow]'),
-      eqMidGain: strip.querySelector('[data-role=eqMidGain]'),
-      eqMidFreq: strip.querySelector('[data-role=eqMidFreq]'),
-      eqMidQ: strip.querySelector('[data-role=eqMidQ]'),
-      eqHigh: strip.querySelector('[data-role=eqHigh]'),
-      pan: strip.querySelector('[data-role=pan]'),
-      aux: strip.querySelector('[data-role=aux]'),
-      fader: strip.querySelector('[data-role=fader]'),
-      mute: strip.querySelector('[data-role=mute]'),
-      solo: strip.querySelector('[data-role=solo]'),
-      meter: strip.querySelector('.meter .bar'),
-      // compressor & delay
-      compOn: strip.querySelector('[data-role=compOn]'),
-      compThresh: strip.querySelector('[data-role=compThresh]'),
-      compRatio: strip.querySelector('[data-role=compRatio]'),
-      compAttack: strip.querySelector('[data-role=compAttack]'),
-      compRelease: strip.querySelector('[data-role=compRelease]'),
-      delayTime: strip.querySelector('[data-role=delayTime]'),
-      delayFb: strip.querySelector('[data-role=delayFb]'),
-      delayMix: strip.querySelector('[data-role=delayMix]'),
-    };
-
-    /* === File load: NO auto-play. Must press Play All. === */
-    ui.file.addEventListener('change', e=>{
-      const file = e.target.files?.[0];
-      if(!file) return;
-      const url = URL.createObjectURL(file);
-      media.autoplay = false;
-      media.src = url;
-      media.pause();
-      try { media.currentTime = 0; } catch(_) {}
-      // Do NOT resume ctx or play here
-    });
-
-    // UI controls
-    ui.trim.addEventListener('input', ()=> preGain.gain.value = parseFloat(ui.trim.value));
-    ui.hpfToggle.addEventListener('change', ()=>{ hpf.frequency.value = ui.hpfToggle.checked ? parseFloat(ui.hpfFreq.value) : 20; });
-    ui.hpfFreq.addEventListener('input', ()=>{ if(ui.hpfToggle.checked) hpf.frequency.value = parseFloat(ui.hpfFreq.value); });
-    ui.eqLow.addEventListener('input', ()=> eqLow.gain.value = parseFloat(ui.eqLow.value));
-    ui.eqMidGain.addEventListener('input', ()=> eqMid.gain.value = parseFloat(ui.eqMidGain.value));
-    ui.eqMidFreq.addEventListener('input', ()=> eqMid.frequency.value = parseFloat(ui.eqMidFreq.value));
-    ui.eqMidQ.addEventListener('input', ()=> eqMid.Q.value = parseFloat(ui.eqMidQ.value));
-    ui.eqHigh.addEventListener('input', ()=> eqHigh.gain.value = parseFloat(ui.eqHigh.value));
-    ui.pan.addEventListener('input', ()=> pan.pan.value = parseFloat(ui.pan.value));
-    ui.aux.addEventListener('input', ()=> auxSend.gain.value = parseFloat(ui.aux.value));
-    ui.fader.addEventListener('input', ()=> postFader.gain.value = parseFloat(ui.fader.value));
-
-    // compressor & delay controls
-    function updateCompRoute(){
-      if(ui.compOn.checked){
-        try{ eqHigh.disconnect(compBypass); }catch(e){}
-        eqHigh.connect(comp);
-        compBypass.gain.value = 0;
-      } else {
-        try{ eqHigh.disconnect(comp); }catch(e){}
-        eqHigh.connect(compBypass);
-        compBypass.gain.value = 1;
-      }
-    }
-    ui.compOn.addEventListener('change', updateCompRoute);
-    ui.compThresh.addEventListener('input', ()=> comp.threshold.value = parseFloat(ui.compThresh.value));
-    ui.compRatio.addEventListener('input', ()=> comp.ratio.value = parseFloat(ui.compRatio.value));
-    ui.compAttack.addEventListener('input', ()=> comp.attack.value = parseFloat(ui.compAttack.value));
-    ui.compRelease.addEventListener('input', ()=> comp.release.value = parseFloat(ui.compRelease.value));
-
-    ui.delayTime.addEventListener('input', ()=> delay.delayTime.value = parseFloat(ui.delayTime.value)/1000);
-    ui.delayFb.addEventListener('input', ()=> delayFb.gain.value = parseFloat(ui.delayFb.value));
-    ui.delayMix.addEventListener('input', ()=> delayMix.gain.value = parseFloat(ui.delayMix.value));
-
-    // ===== Channel meter (RMS time-domain → visible) =====
-    function drawMeter(){
-      const arr = new Uint8Array(analyser.fftSize);
-      analyser.getByteTimeDomainData(arr);
-      let sum = 0;
-      for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum += v*v; }
-      const rms = Math.sqrt(sum/arr.length);   // 0..~1
-      const pct = Math.min(100, Math.max(0, rms * 140)); // scale for visibility
-      ui.meter.style.height = Math.round(pct)+"%";
-      requestAnimationFrame(drawMeter);
-    }
-    drawMeter();
-
-    state.channels[def.id] = { index, def, strip, media, nodes:{src,preGain,hpf,eqLow,eqMid,eqHigh,comp,pan,auxSend,postFader,analyser,delay,delayFb,delayMix,compBypass} , ui };
-    return strip;
+    return id;
   }
 
-  /* ===== MUTE + SOLO (mute wins; solo isolates) ===== */
-  function updateSoloMute(){
-    const anySolo = Object.values(state.channels).some(ch => ch.strip.dataset.solo==='1');
-    for(const ch of Object.values(state.channels)){
-      const isSoloed = ch.strip.dataset.solo==='1';
-      const isMuted  = ch.strip.dataset.muted==='1';
-      const faderVal = parseFloat(ch.ui.fader.value);
-      const target = isMuted ? 0 : ((anySolo && !isSoloed) ? 0 : faderVal);
-      ch.nodes.postFader.gain.value = target;
-      ch.ui.mute.textContent = isMuted ? 'Unmute' : 'Mute';
-      ch.ui.solo.textContent = isSoloed ? 'Unsolo' : 'Solo';
-    }
+  // Persisted license
+  function saveLicense(key, plan) {
+    localStorage.setItem('vmix_license', JSON.stringify({ key, plan }));
+  }
+  function loadLicense() {
+    try { return JSON.parse(localStorage.getItem('vmix_license') || 'null'); }
+    catch { return null; }
+  }
+  function clearLicense() {
+    localStorage.removeItem('vmix_license');
   }
 
-  // Build UI grid
-  const grid = document.getElementById('grid');
-  channelDefs.forEach((def, i) => {
-    const strip = createChannel(def, i);
-    grid.appendChild(strip);
-    const ch = state.channels[def.id];
-
-    // MUTE
-    ch.ui.mute.addEventListener('click', ()=>{
-      const isMuted = ch.strip.dataset.muted==='1';
-      ch.strip.dataset.muted = isMuted ? '0' : '1';
-      updateSoloMute();
+  // ====== NETLIFY FUNCTION HELPERS (Server) ======
+  async function verifyKey(key) {
+    const url = `/.netlify/functions/verify?key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, { headers: { 'Cache-Control':'no-cache' }});
+    return res.json();
+  }
+  async function activateKey(key, deviceId) {
+    const res = await fetch('/.netlify/functions/activate', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ key, deviceId })
     });
-
-    // SOLO
-    ch.ui.solo.addEventListener('click', ()=>{
-      const isSoloed = ch.strip.dataset.solo==='1';
-      ch.strip.dataset.solo = isSoloed ? '0' : '1';
-      updateSoloMute();
+    return res.json();
+  }
+  async function deactivateKey(key, deviceId) {
+    const res = await fetch('/.netlify/functions/deactivate', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ key, deviceId })
     });
-  });
-
-  // Master controls
-  const masterFader = document.getElementById('masterFader');
-  const reverbReturnKnob = document.getElementById('reverbReturn');
-  masterFader.addEventListener('input', ()=> masterGain.gain.value = parseFloat(masterFader.value));
-  reverbReturnKnob.addEventListener('input', ()=> reverbReturn.gain.value = parseFloat(reverbReturnKnob.value));
-
-  // ===== Master meter (RMS time-domain) =====
-  (function masterMeterLoop(){
-    const bar = document.querySelector('#masterMeter .bar');
-    const arr = new Uint8Array(analyserMaster.fftSize);
-    function draw(){
-      analyserMaster.getByteTimeDomainData(arr);
-      let sum=0; for(let i=0;i<arr.length;i++){ const v=(arr[i]-128)/128; sum+=v*v; }
-      const rms=Math.sqrt(sum/arr.length);
-      const pct = Math.min(100, Math.max(0, rms*140));
-      bar.style.height = Math.round(pct)+"%";
-      requestAnimationFrame(draw);
-    }
-    draw();
-  })();
-
-  // Scenarios / Presets
-  function applyScenario(name){
-    const C = state.channels;
-    function set(chId, fn){ if(C[chId]) fn(C[chId].ui); }
-    if(name==='worship_live'){
-      set('voxLead', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=110; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-2; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=300; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=2; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.18; ui.aux.dispatchEvent(new Event('input')); ui.pan.value=0; ui.pan.dispatchEvent(new Event('input')); ui.compOn.checked=true; ui.compOn.dispatchEvent(new Event('change')); });
-      set('bgv1', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=120; ui.hpfToggle.dispatchEvent(new Event('change')); ui.pan.value=-0.35; ui.pan.dispatchEvent(new Event('input')); ui.eqHigh.value=1.5; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.22; ui.aux.dispatchEvent(new Event('input')); });
-      set('bgv2', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=120; ui.hpfToggle.dispatchEvent(new Event('change')); ui.pan.value=0.35; ui.pan.dispatchEvent(new Event('input')); ui.eqHigh.value=1.5; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.22; ui.aux.dispatchEvent(new Event('input')); });
-      set('gtr', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=90; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-2; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=250; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.pan.value=0.25; ui.pan.dispatchEvent(new Event('input')); });
-      set('keys', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=80; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-1.5; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=300; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.pan.value=-0.25; ui.pan.dispatchEvent(new Event('input')); ui.aux.value=0.15; ui.aux.dispatchEvent(new Event('input')); });
-      set('drums', ui=>{ ui.hpfToggle.checked=false; ui.eqLow.value=2; ui.eqLow.dispatchEvent(new Event('input')); ui.eqMidGain.value=-2; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=350; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.pan.value=0; ui.pan.dispatchEvent(new Event('input')); ui.aux.value=0.08; ui.aux.dispatchEvent(new Event('input')); });
-      set('sax', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=100; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-1; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=300; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=2; ui.eqHigh.dispatchEvent(new Event('input')); ui.delayTime.value=110; ui.delayTime.dispatchEvent(new Event('input')); ui.delayMix.value=0.12; ui.delayMix.dispatchEvent(new Event('input')); ui.pan.value=0.2; ui.pan.dispatchEvent(new Event('input')); ui.compOn.checked=true; ui.compOn.dispatchEvent(new Event('change')); });
-      document.getElementById('reverbReturn').value = 0.18; reverbReturn.gain.value = 0.18;
-    }
-    else if(name==='studio_pop'){
-      set('voxLead', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=100; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-1.5; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=250; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=3; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.28; ui.aux.dispatchEvent(new Event('input')); ui.compOn.checked=true; ui.compOn.dispatchEvent(new Event('change')); });
-      set('bgv1', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=120; ui.hpfToggle.dispatchEvent(new Event('change')); ui.pan.value=-0.4; ui.pan.dispatchEvent(new Event('input')); ui.eqHigh.value=2; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.32; ui.aux.dispatchEvent(new Event('input')); });
-      set('bgv2', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=120; ui.hpfToggle.dispatchEvent(new Event('change')); ui.pan.value=0.4; ui.pan.dispatchEvent(new Event('input')); ui.eqHigh.value=2; ui.eqHigh.dispatchEvent(new Event('input')); ui.aux.value=0.32; ui.aux.dispatchEvent(new Event('input')); });
-      set('gtr', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=100; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-3; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=400; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=1; ui.eqHigh.dispatchEvent(new Event('input')); ui.pan.value=0.5; ui.pan.dispatchEvent(new Event('input')); });
-      set('keys', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=90; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-2; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=350; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.pan.value=-0.5; ui.pan.dispatchEvent(new Event('input')); ui.aux.value=0.22; ui.aux.dispatchEvent(new Event('input')); });
-      set('drums', ui=>{ ui.hpfToggle.checked=false; ui.eqLow.value=2.5; ui.eqLow.dispatchEvent(new Event('input')); ui.eqMidGain.value=-3; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=300; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.pan.value=0; ui.pan.dispatchEvent(new Event('input')); ui.aux.value=0.12; ui.aux.dispatchEvent(new Event('input')); });
-      set('sax', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=100; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-1; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=300; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=2; ui.eqHigh.dispatchEvent(new Event('input')); ui.delayTime.value=120; ui.delayTime.dispatchEvent(new Event('input')); ui.delayMix.value=0.15; ui.delayMix.dispatchEvent(new Event('input')); ui.pan.value=0.15; ui.pan.dispatchEvent(new Event('input')); ui.compOn.checked=true; ui.compOn.dispatchEvent(new Event('change')); });
-      document.getElementById('reverbReturn').value = 0.26; reverbReturn.gain.value = 0.26;
-    }
-    else if(name==='jazz_sax'){
-      set('voxLead', ui=>{ ui.fader.value=0.8; ui.fader.dispatchEvent(new Event('input')); });
-      set('bgv1', ui=>{ ui.fader.value=0.7; ui.fader.dispatchEvent(new Event('input')); });
-      set('bgv2', ui=>{ ui.fader.value=0.7; ui.fader.dispatchEvent(new Event('input')); });
-      set('gtr', ui=>{ ui.pan.value=-0.25; ui.pan.dispatchEvent(new Event('input')); });
-      set('keys', ui=>{ ui.pan.value=0.25; ui.pan.dispatchEvent(new Event('input')); });
-      set('drums', ui=>{ ui.eqLow.value=2; ui.eqLow.dispatchEvent(new Event('input')); });
-      set('sax', ui=>{ ui.hpfToggle.checked=true; ui.hpfFreq.value=95; ui.hpfToggle.dispatchEvent(new Event('change')); ui.eqMidGain.value=-1; ui.eqMidGain.dispatchEvent(new Event('input')); ui.eqMidFreq.value=280; ui.eqMidFreq.dispatchEvent(new Event('input')); ui.eqHigh.value=2.5; ui.eqHigh.dispatchEvent(new Event('input')); ui.delayTime.value=100; ui.delayTime.dispatchEvent(new Event('input')); ui.delayMix.value=0.18; ui.delayMix.dispatchEvent(new Event('input')); ui.compOn.checked=true; ui.compOn.dispatchEvent(new Event('change')); ui.pan.value=0.2; ui.pan.dispatchEvent(new Event('input')); });
-      document.getElementById('reverbReturn').value = 0.22; reverbReturn.gain.value = 0.22;
-    }
+    return res.json();
   }
 
-  document.getElementById('applyScenario').addEventListener('click', ()=>{
-    const sel = document.getElementById('scenario').value;
-    if(!isFull && sel!=='none'){ alert("Scenarios are limited in demo mode. Activate license to unlock all."); return; }
-    applyScenario(sel);
-  });
+  // ====== DEMO LOCKS ======
+  function isStripLocked(idx){ return !window.isFull && idx > 2; } // only first 3 strips active in demo
 
-  // Demo locks
+  // Make this robust and idempotent (safe to call many times)
   function refreshDemoLocks(){
     const strips = Array.from(document.querySelectorAll('.strip'));
-    strips.forEach((el, idx)=>{
-      const disabled = !isFull && idx > 2; // only first 3 strips active in demo
-      el.classList.toggle('disabled', disabled);
-    });
-    // limit reverb in demo
-    const rr = document.getElementById('reverbReturn');
-    if(!isFull){ reverbReturn.gain.value = Math.min(0.12, parseFloat(rr.value)); }
-  }
-  refreshDemoLocks();
 
-  // ===== Recording setup (capture master mix) =====
-  let mediaRecorder = null;
-  let recChunks = [];
-  let recStartTime = 0;
-  let recTimerId = null;
+    strips.forEach((el, idx) => {
+      const locked = isStripLocked(idx);
+      el.classList.toggle('disabled', locked);
 
-  const recDest = ctx.createMediaStreamDestination(); // tap master to a stream
-  masterGain.connect(recDest);
-
-  const recBtn = document.getElementById('recordBtn');
-  const recTimer = document.getElementById('recTimer');
-
-  const canRecord = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
-    ? (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') || MediaRecorder.isTypeSupported('audio/webm'))
-    : false;
-
-  function formatTime(ms){
-    const s = Math.floor(ms/1000);
-    const m = Math.floor(s/60);
-    const ss = (s%60).toString().padStart(2,'0');
-    return `${m}:${ss}`;
-  }
-  function startTimer(){
-    recStartTime = performance.now();
-    recTimer.classList.remove('hidden');
-    recTimer.classList.add('recording');
-    recTimer.textContent = '00:00';
-    recTimerId = setInterval(()=>{
-      const t = performance.now() - recStartTime;
-      recTimer.textContent = formatTime(t);
-    }, 250);
-  }
-  function stopTimer(){
-    if(recTimerId){ clearInterval(recTimerId); recTimerId = null; }
-    recTimer.classList.remove('recording');
-  }
-  function startRecording(){
-    ctx.resume();
-    const mime = (typeof MediaRecorder!=='undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
-      ? 'audio/webm;codecs=opus' : 'audio/webm';
-    mediaRecorder = new MediaRecorder(recDest.stream, { mimeType: mime, audioBitsPerSecond: 128000 });
-    recChunks = [];
-    mediaRecorder.ondataavailable = e => { if(e.data && e.data.size > 0) recChunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      stopTimer();
-      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const ts = new Date().toISOString().replace(/[:.]/g,'-');
-      a.href = url;
-      a.download = `VirtualMixer_${ts}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 100);
-      recBtn.textContent = '⏺ Record';
-      recBtn.classList.remove('recording');
-    };
-    mediaRecorder.start(250);
-    startTimer();
-    recBtn.textContent = '■ Stop';
-    recBtn.classList.add('recording');
-  }
-  function stopRecording(){
-    if(mediaRecorder && mediaRecorder.state !== 'inactive'){
-      mediaRecorder.stop();
-    }
-  }
-  recBtn.addEventListener('click', ()=>{
-    if(!canRecord){
-      alert('Recording is not supported in this browser. Use Chrome/Edge/Brave on desktop.');
-      return;
-    }
-    if(!mediaRecorder || mediaRecorder.state === 'inactive'){
-      startRecording();
-    } else {
-      stopRecording();
-    }
-  });
-
-  // ===== Transport: Play/Pause (no auto-play elsewhere) =====
-  document.getElementById('playAll').addEventListener('click', ()=>{
-    ctx.resume();
-    for(const ch of Object.values(state.channels)){
-      if(ch.media.src) ch.media.play().catch(()=>{});
-    }
-  });
-  document.getElementById('pauseAll').addEventListener('click', ()=>{
-    for(const ch of Object.values(state.channels)) ch.media.pause();
-  });
-
-  // Unlock audio on first gesture
-  window.addEventListener('click', ()=> ctx.resume(), { once:true });
-  </script>
-  <script>
-  (function registerSWIfWeb(){
-    const isElectron = !!(window && window.process && window.process.versions && window.process.versions.electron);
-    if ('serviceWorker' in navigator && !isElectron) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js');
+      // Disable all interactive controls
+      el.querySelectorAll('input, button, select').forEach(ctrl => {
+        ctrl.disabled = locked;
       });
+
+      // If a channel exists in your state, also mark + silence it
+      const chId = Object.keys(state.channels)[idx];
+      const ch   = state.channels[chId];
+      if (ch){
+        ch.locked = locked;
+        if (locked){
+          try { ch.media.pause(); } catch {}
+          try { ch.nodes?.postFader && (ch.nodes.postFader.gain.value = 0); } catch {}
+        }
+      }
+    });
+
+    // (Optional) limit reverb in demo
+    const rrEl = document.getElementById('reverbReturn');
+    if (!window.isFull && rrEl && reverbReturn){
+      const cap = 0.20;
+      if (parseFloat(rrEl.value) > cap){
+        rrEl.value = cap;
+        try { reverbReturn.gain.value = cap; } catch {}
+      }
+    }
+  }
+
+  // ====== FULL / DEMO MODE APPLY ======
+  function applyFullMode(enabled){
+    window.isFull = !!enabled;
+    if (licenseStatus) licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
+    // If your old code also uses this name, we keep it identical:
+    refreshDemoLocks();
+  }
+
+  // Expose for any of your other code that may call it
+  window.refreshDemoLocks = refreshDemoLocks;
+  window.applyFullMode    = applyFullMode;
+
+  // ====== ENSURE PLAY ONLY UNLOCKED STRIPS ======
+  // Safely replace Play All button to remove any previous listeners
+  if (playAllBtnOrig) {
+    const playAllBtn = playAllBtnOrig.cloneNode(true);
+    playAllBtnOrig.parentNode.replaceChild(playAllBtn, playAllBtnOrig);
+    playAllBtn.addEventListener('click', ()=>{
+      if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch {} }
+      for (const ch of Object.values(state.channels)){
+        if (!ch?.locked && ch?.media?.src){
+          try { ch.media.play().catch(()=>{}); } catch {}
+        }
+      }
+    });
+  }
+
+  // Pause All is usually fine as-is; if you want to ensure it pauses everything:
+  if (pauseAllBtn && !pauseAllBtn._vmixBound){
+    pauseAllBtn._vmixBound = true;
+    pauseAllBtn.addEventListener('click', ()=>{
+      for (const ch of Object.values(state.channels)){
+        try { ch.media.pause(); } catch {}
+      }
+    });
+  }
+
+  // ====== BOOTSTRAP (auto-restore license on load) ======
+  (async function bootstrapLicense(){
+    const saved = loadLicense();
+    if (!saved?.key) { applyFullMode(false); return; }
+    try {
+      const res = await verifyKey(saved.key);
+      if (res.valid) {
+        applyFullMode(true);
+      } else {
+        clearLicense();
+        applyFullMode(false);
+      }
+    } catch {
+      // If server is unreachable, keep last known state (best effort)
+      applyFullMode(!!saved?.key);
     }
   })();
-  </script>
+
+  // ====== ACTIVATE / DEACTIVATE BUTTONS ======
+  activateBtn?.addEventListener('click', async ()=>{
+    const key = (input?.value || '').trim();
+    if (!key) { alert('Please enter your license key.'); return; }
+
+    activateBtn.disabled = true;
+    const oldText = activateBtn.textContent;
+    activateBtn.textContent = 'Checking…';
+
+    try {
+      const vr = await verifyKey(key);
+      if (!vr.valid) {
+        alert('Key not valid: ' + (vr.reason || 'unknown'));
+        applyFullMode(false);
+        return;
+      }
+
+      const deviceId = getDeviceId();
+      const act = await activateKey(key, deviceId);
+      if (act.ok === false) {
+        alert('Activation error: ' + (act.reason || 'unknown'));
+        applyFullMode(false);
+        return;
+      }
+
+      saveLicense(key, vr.plan || 'full');
+      applyFullMode(true);
+      alert('License activated. Full features unlocked.');
+    } catch (e) {
+      console.error(e);
+      alert('Network error while activating. Please try again.');
+    } finally {
+      activateBtn.disabled = false;
+      activateBtn.textContent = oldText;
+    }
+  });
+
+  deactivateBtn?.addEventListener('click', async ()=>{
+    const saved = loadLicense();
+    // Best-effort server notify
+    try {
+      if (saved?.key) {
+        const deviceId = getDeviceId();
+        await deactivateKey(saved.key, deviceId);
+      }
+    } catch {}
+    clearLicense();
+    applyFullMode(false);
+    alert('License removed. You are back in demo mode.');
+  });
+
+  // ====== OPTIONAL: PREVENT AUTO-PLAY ON FILE LOAD (if your original did auto-play) ======
+  // If your original on file-change does "media.play()", comment it there.
+  // This guard stops "Play All" from starting locked strips even if a file was just loaded.
+  document.addEventListener('change', (e)=>{
+    const input = e.target;
+    if (input && input.matches('input[type="file"]')){
+      // Find which strip this file input belongs to and prevent auto-start if locked
+      const strip = input.closest('.strip');
+      if (!strip) return;
+      const allStrips = Array.from(document.querySelectorAll('.strip'));
+      const idx = allStrips.indexOf(strip);
+      if (isStripLocked(idx)) {
+        // If your code starts playback immediately after load, this ensures it gets paused.
+        // (We do not interfere with your file URL assignment.)
+        const chId = Object.keys(state.channels)[idx];
+        const ch   = state.channels[chId];
+        if (ch?.media) { try { ch.media.pause(); } catch {} }
+      }
+    }
+  }, true);
+})();
+</script>
 </body>
 </html>
