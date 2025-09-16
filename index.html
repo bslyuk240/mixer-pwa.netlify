@@ -5,18 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Virtual Mixer Trainer v0.2</title>
 
-<!-- PWA manifest -->
-<link rel="manifest" href="./manifest.webmanifest">
-
-<!-- Favicons (use your PNGs since you don't have .ico/.svg) -->
-<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="./icon-512.png">
-
-<!-- iOS home-screen icon -->
-<link rel="apple-touch-icon" href="./apple-touch-icon.png" sizes="180x180">
-
-<!-- (Nice to have) UI color for address bar / Android splash bg -->
-<meta name="theme-color" content="#0e1116">
+  <!-- BRAND ICONS -->
+  <link rel="icon" href="./favicon.ico">
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" sizes="180x180">
 
   <style>
     :root{
@@ -91,7 +83,7 @@
   <header>
     <div class="wrap">
       <!-- brand icon beside the title -->
-      <img class="brandmark" src="./icons/icon-192.png" alt="Logo" width="20" height="20">
+      <img class="brandmark" src="./favicon.svg" alt="Logo">
       <h1>Virtual Mixer Trainer <span class="small">v0.2</span></h1>
       <span class="pill">Load stems • Practice live & studio • 🎷 Sax • Demo/Full lock</span>
 
@@ -112,6 +104,7 @@
         <span class="pill">License: <span id="licenseStatus">DEMO</span></span>
         <input id="licenseInput" type="text" placeholder="Enter license key">
         <button id="activateBtn" class="btn">Activate</button>
+        <!-- added: deactivate button -->
         <button id="deactivateBtn" class="btn">Deactivate</button>
       </div>
     </div>
@@ -135,7 +128,6 @@
       <h3>How to use</h3>
       <div class="note">
         Demo mode: only the first 3 channels are active and scenarios are limited. Enter a valid key to unlock all features.
-      
       </div>
       <h3 style="margin-top:10px">Training Notes</h3>
       <ul class="note" style="margin-left:18px">
@@ -151,147 +143,108 @@
   </section>
 
   <script>
-  // ===== LICENSE (keep your layout + behavior) =====
-(() => {
-  // --- selectors from your page ---
-  const input = document.getElementById('licenseInput');
-  const activateBtn = document.getElementById('activateBtn');
-  const licenseStatus = document.getElementById('licenseStatus');
-  // Optional: only if you added a Deactivate button in the header
-  const deactivateBtn = document.getElementById('deactivateBtn');
+  /* ===== LICENSE (server-based; minimal change to your structure) ===== */
+  (() => {
+    const input = document.getElementById('licenseInput');
+    const activateBtn = document.getElementById('activateBtn');
+    const deactivateBtn = document.getElementById('deactivateBtn');
+    const licenseStatus = document.getElementById('licenseStatus');
 
-  // Persisted device id (used by backend to count devices)
-  function getDeviceId() {
-    let id = localStorage.getItem('vmix_device_id');
-    if (!id) {
-      id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('vmix_device_id', id);
+    // Keep your global flag + locks
+    let isFull = false;
+    function applyFullMode(enabled){
+      isFull = enabled;
+      licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
+      if (typeof refreshDemoLocks === 'function') refreshDemoLocks();
     }
-    return id;
-  }
 
-  // Hooks you already use in the app
-  let isFull = false;                      // your global flag
-  function applyFullMode(enabled) {
-    isFull = enabled;
-    licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
-    if (typeof refreshDemoLocks === 'function') refreshDemoLocks();
-  }
-
-  // Local storage helpers
-  function saveLicense(key, plan) {
-    localStorage.setItem('vmix_license', JSON.stringify({ key, plan }));
-  }
-  function loadLicense() {
-    try { return JSON.parse(localStorage.getItem('vmix_license') || 'null'); }
-    catch { return null; }
-  }
-  function clearLicense() {
-    localStorage.removeItem('vmix_license');
-  }
-
-  // --- Netlify Functions calls ---
-  async function verifyKey(key) {
-    const url = `/.netlify/functions/verify?key=${encodeURIComponent(key)}`;
-    try {
-      const res = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
-      return await res.json(); // { valid, plan, row? }
-    } catch (e) {
-      console.error('verify error', e);
-      return { valid: false, reason: 'network_error' };
+    // Simple device id for activations
+    function getDeviceId(){
+      let id = localStorage.getItem('vmix_device_id');
+      if(!id){ id = 'dev-'+Math.random().toString(36).slice(2)+Date.now().toString(36);
+        localStorage.setItem('vmix_device_id', id);
+      }
+      return id;
     }
-  }
 
-  async function activateKey(key, deviceId) {
-    try {
+    // Persist license
+    function saveLicense(key, plan){ localStorage.setItem('vmix_license', JSON.stringify({key, plan})); }
+    function loadLicense(){ try { return JSON.parse(localStorage.getItem('vmix_license')||'null'); } catch {return null;} }
+    function clearLicense(){ localStorage.removeItem('vmix_license'); }
+
+    // Netlify functions
+    async function verifyKey(key){
+      const url = '/.netlify/functions/verify?key='+encodeURIComponent(key);
+      const res = await fetch(url, { headers: {'Cache-Control':'no-cache'} });
+      return res.json(); // {valid, plan}
+    }
+    async function activateKey(key, deviceId){
       const res = await fetch('/.netlify/functions/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ key, deviceId })
       });
-      return await res.json(); // { ok:true } or { ok:false, reason }
-    } catch (e) {
-      console.error('activate error', e);
-      return { ok: false, reason: 'network_error' };
+      return res.json(); // {ok}
     }
-  }
-
-  async function deactivateKey(key, deviceId) {
-    try {
+    async function deactivateKey(key, deviceId){
       const res = await fetch('/.netlify/functions/deactivate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ key, deviceId })
       });
-      return await res.json(); // best-effort
-    } catch (e) {
-      console.error('deactivate error', e);
-      return { ok: false };
+      return res.json(); // {ok}
     }
-  }
 
-  // --- Auto-restore on load ---
-  (async function bootstrapLicense() {
-    const saved = loadLicense();
-    if (!saved?.key) { applyFullMode(false); return; }
-    const check = await verifyKey(saved.key);
-    if (check.valid) {
-      applyFullMode(true);
-    } else {
+    // Auto-restore if previously activated
+    (async function bootstrap(){
+      const saved = loadLicense();
+      if(!saved?.key){ applyFullMode(false); return; }
+      try {
+        const v = await verifyKey(saved.key);
+        if(v.valid){ applyFullMode(true); }
+        else { clearLicense(); applyFullMode(false); }
+      } catch {
+        // if offline, keep last state
+        applyFullMode(!!saved?.key);
+      }
+    })();
+
+    // Activate click
+    activateBtn?.addEventListener('click', async ()=>{
+      const key = (input?.value || '').trim();
+      if(!key){ alert('Please enter your license key.'); return; }
+
+      activateBtn.disabled = true;
+      activateBtn.textContent = 'Checking…';
+      try {
+        const v = await verifyKey(key);
+        if(!v.valid){ alert('Key not valid: '+(v.reason||'unknown')); applyFullMode(false); return; }
+        const dev = getDeviceId();
+        const act = await activateKey(key, dev);
+        if(act.ok === false){ alert('Activation error: '+(act.reason||'unknown')); applyFullMode(false); return; }
+        saveLicense(key, v.plan||'full');
+        applyFullMode(true);
+        alert('License activated. Full features unlocked.');
+      } catch(e){
+        console.error(e); alert('Network error while activating.');
+      } finally {
+        activateBtn.disabled = false;
+        activateBtn.textContent = 'Activate';
+      }
+    });
+
+    // Deactivate click
+    deactivateBtn?.addEventListener('click', async ()=>{
+      const saved = loadLicense();
+      if(saved?.key){
+        try { await deactivateKey(saved.key, getDeviceId()); } catch {}
+      }
       clearLicense();
       applyFullMode(false);
-    }
+      alert('License removed. You are back in demo mode.');
+    });
   })();
+  </script>
 
-  // --- Activate click ---
-  activateBtn?.addEventListener('click', async () => {
-    const key = (input?.value || '').trim();
-    if (!key) { alert('Please enter your license key.'); return; }
-
-    activateBtn.disabled = true;
-    activateBtn.textContent = 'Checking…';
-
-    try {
-      const check = await verifyKey(key);
-      if (!check.valid) {
-        alert('Key not valid: ' + (check.reason || 'unknown'));
-        applyFullMode(false);
-        return;
-      }
-
-      const deviceId = getDeviceId();
-      const act = await activateKey(key, deviceId);
-      if (act.ok === false) {
-        alert('Activation error: ' + (act.reason || 'unknown'));
-        applyFullMode(false);
-        return;
-      }
-
-      saveLicense(key, check.plan || 'full');
-      applyFullMode(true);
-      alert('License activated. Full features unlocked.');
-    } catch (e) {
-      console.error(e);
-      alert('Network error while activating. Please try again.');
-    } finally {
-      activateBtn.disabled = false;
-      activateBtn.textContent = 'Activate';
-    }
-  });
-
-  // --- Deactivate (only if you added a button) ---
-  deactivateBtn?.addEventListener('click', async () => {
-    const saved = loadLicense();
-    if (saved?.key) {
-      const deviceId = getDeviceId();
-      try { await deactivateKey(saved.key, deviceId); } catch {}
-    }
-    clearLicense();
-    applyFullMode(false);
-    alert('License removed. You are back in demo mode.');
-  });
-})();
-
+  <script>
   // ===== Audio Engine =====
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const masterGain = ctx.createGain();
@@ -720,11 +673,16 @@
 
   // Unlock audio on first gesture
   window.addEventListener('click', ()=> ctx.resume(), { once:true });
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
+  </script>
+  <script>
+  (function registerSWIfWeb(){
+    const isElectron = !!(window && window.process && window.process.versions && window.process.versions.electron);
+    if ('serviceWorker' in navigator && !isElectron) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js');
+      });
+    }
+  })();
   </script>
 </body>
 </html>
