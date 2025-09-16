@@ -150,22 +150,146 @@
   </section>
 
   <script>
-  // ===== License (demo vs full) =====
-  const LICENSE_KEY = "Bensly-VMIX-2025";
-  let isFull = false;
-  const licenseInput = document.getElementById('licenseInput');
+  // ===== LICENSE (keep your layout + behavior) =====
+(() => {
+  // --- selectors from your page ---
+  const input = document.getElementById('licenseInput');
+  const activateBtn = document.getElementById('activateBtn');
   const licenseStatus = document.getElementById('licenseStatus');
-  document.getElementById('activateBtn').addEventListener('click', ()=>{
-    const val = (licenseInput.value||"").trim();
-    if(val === LICENSE_KEY){
-      isFull = true;
-      licenseStatus.textContent = "FULL";
-      refreshDemoLocks();
-      alert("License activated. Full features unlocked.");
+  // Optional: only if you added a Deactivate button in the header
+  const deactivateBtn = document.getElementById('deactivateBtn');
+
+  // Persisted device id (used by backend to count devices)
+  function getDeviceId() {
+    let id = localStorage.getItem('vmix_device_id');
+    if (!id) {
+      id = 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('vmix_device_id', id);
+    }
+    return id;
+  }
+
+  // Hooks you already use in the app
+  let isFull = false;                      // your global flag
+  function applyFullMode(enabled) {
+    isFull = enabled;
+    licenseStatus.textContent = enabled ? 'FULL' : 'DEMO';
+    if (typeof refreshDemoLocks === 'function') refreshDemoLocks();
+  }
+
+  // Local storage helpers
+  function saveLicense(key, plan) {
+    localStorage.setItem('vmix_license', JSON.stringify({ key, plan }));
+  }
+  function loadLicense() {
+    try { return JSON.parse(localStorage.getItem('vmix_license') || 'null'); }
+    catch { return null; }
+  }
+  function clearLicense() {
+    localStorage.removeItem('vmix_license');
+  }
+
+  // --- Netlify Functions calls ---
+  async function verifyKey(key) {
+    const url = `/.netlify/functions/verify?key=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
+      return await res.json(); // { valid, plan, row? }
+    } catch (e) {
+      console.error('verify error', e);
+      return { valid: false, reason: 'network_error' };
+    }
+  }
+
+  async function activateKey(key, deviceId) {
+    try {
+      const res = await fetch('/.netlify/functions/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, deviceId })
+      });
+      return await res.json(); // { ok:true } or { ok:false, reason }
+    } catch (e) {
+      console.error('activate error', e);
+      return { ok: false, reason: 'network_error' };
+    }
+  }
+
+  async function deactivateKey(key, deviceId) {
+    try {
+      const res = await fetch('/.netlify/functions/deactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, deviceId })
+      });
+      return await res.json(); // best-effort
+    } catch (e) {
+      console.error('deactivate error', e);
+      return { ok: false };
+    }
+  }
+
+  // --- Auto-restore on load ---
+  (async function bootstrapLicense() {
+    const saved = loadLicense();
+    if (!saved?.key) { applyFullMode(false); return; }
+    const check = await verifyKey(saved.key);
+    if (check.valid) {
+      applyFullMode(true);
     } else {
-      alert("Invalid key (training build demo).");
+      clearLicense();
+      applyFullMode(false);
+    }
+  })();
+
+  // --- Activate click ---
+  activateBtn?.addEventListener('click', async () => {
+    const key = (input?.value || '').trim();
+    if (!key) { alert('Please enter your license key.'); return; }
+
+    activateBtn.disabled = true;
+    activateBtn.textContent = 'Checking…';
+
+    try {
+      const check = await verifyKey(key);
+      if (!check.valid) {
+        alert('Key not valid: ' + (check.reason || 'unknown'));
+        applyFullMode(false);
+        return;
+      }
+
+      const deviceId = getDeviceId();
+      const act = await activateKey(key, deviceId);
+      if (act.ok === false) {
+        alert('Activation error: ' + (act.reason || 'unknown'));
+        applyFullMode(false);
+        return;
+      }
+
+      saveLicense(key, check.plan || 'full');
+      applyFullMode(true);
+      alert('License activated. Full features unlocked.');
+    } catch (e) {
+      console.error(e);
+      alert('Network error while activating. Please try again.');
+    } finally {
+      activateBtn.disabled = false;
+      activateBtn.textContent = 'Activate';
     }
   });
+
+  // --- Deactivate (only if you added a button) ---
+  deactivateBtn?.addEventListener('click', async () => {
+    const saved = loadLicense();
+    if (saved?.key) {
+      const deviceId = getDeviceId();
+      try { await deactivateKey(saved.key, deviceId); } catch {}
+    }
+    clearLicense();
+    applyFullMode(false);
+    alert('License removed. You are back in demo mode.');
+  });
+})();
 
   // ===== Audio Engine =====
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
