@@ -1,59 +1,41 @@
-// netlify/functions/verify.js
+// verify.js  -> GET /.netlify/functions/verify?key=XXXX
 const { supabase } = require('./_supabase');
 
 exports.handler = async (event) => {
   try {
-    // Allow POST with JSON body OR GET with ?key=
-    let key = '';
-    if (event.httpMethod === 'POST') {
-      try {
-        const body = JSON.parse(event.body || '{}');
-        key = (body.key || '').trim();
-      } catch {}
-    } else if (event.httpMethod === 'GET') {
-      const params = new URLSearchParams(event.rawQuery || event.queryStringParameters || {});
-      key = (params.get ? params.get('key') : (params.key || '')).trim();
-    }
+    const key = (event.queryStringParameters?.key || '').trim();
+    if (!key) return json({ valid: false, reason: 'missing_key' }, 400);
 
-    if (!key) {
-      return json(400, { valid: false, reason: 'missing_key' });
-    }
-
-    // Query licenses table
-    const { data, error } = await supabase
+    const { data: lic, error } = await supabase
       .from('licenses')
-      .select('key, plan, status, expires_date')
+      .select('key, plan, status, max_devices')
       .eq('key', key)
       .single();
 
-    if (error) {
-      // Surface the DB error to help us debug
-      return json(500, { valid: false, reason: 'db_error', detail: error.message });
-    }
+    if (error || !lic) return json({ valid: false, reason: 'not_found' }, 404);
+    if (lic.status !== 'active') return json({ valid: false, reason: 'revoked' }, 403);
 
-    if (!data) {
-      return json(200, { valid: false, reason: 'not_found' });
-    }
+    // Count distinct devices that have ever activated this key
+    const { data: rows, error: e2 } = await supabase
+      .from('activations')
+      .select('device_id')
+      .eq('license_key', key);
 
-    if (data.status !== 'active') {
-      return json(200, { valid: false, reason: 'inactive', row: data });
-    }
+    const uniqueCount = e2 ? 0 : new Set((rows || []).map(r => r.device_id)).size;
 
-    // (Optional) expiry check
-    if (data.expires_date && new Date(data.expires_date) < new Date()) {
-      return json(200, { valid: false, reason: 'expired', row: data });
-    }
-
-    return json(200, { valid: true, plan: data.plan || 'full', row: data });
+    return json({
+      valid: true,
+      plan: lic.plan,
+      status: lic.status,
+      max_devices: lic.max_devices,
+      devices_used: uniqueCount
+    });
   } catch (e) {
-    return json(500, { valid: false, reason: 'server_exception', detail: String(e) });
+    console.error(e);
+    return json({ valid: false, reason: 'server_error' }, 500);
   }
 };
 
-function json(statusCode, obj) {
-  return {
-    statusCode,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(obj),
-  };
+function json(body, status = 200) {
+  return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
 }
