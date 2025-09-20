@@ -1,131 +1,130 @@
 // netlify/functions/generate.js
-// Generates a license on WooCommerce webhook (order paid/updated).
-// - Accepts GET (for health check) => 200
-// - Verifies HMAC signature from Woo on POST using WC_WEBHOOK_SECRET
-// - Gracefully handles Woo's initial "ping" or test payloads
+// Robust WooCommerce → Netlify webhook that:
+// - Replies 200 to Woo "ping" tests (no signature needed)
+// - Verifies HMAC signature for real order payloads
+// - Creates a license row in Supabase (max 2 devices, no expiry)
 
 const crypto = require("crypto");
-const { createClient } = require("@supabase/supabase-js");
+const { supabase } = require("./_supabase");
 
-// env
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const WC_WEBHOOK_SECRET = process.env.WC_WEBHOOK_SECRET;
+const SECRET = process.env.WC_WEBHOOK_SECRET;
 
-// supabase client (service role)
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-  auth: { persistSession: false },
-});
+// HMAC-SHA256 base64, same as WooCommerce
+function makeSignature(rawBody, secret) {
+  return crypto.createHmac("sha256", String(secret)).update(rawBody).digest("base64");
+}
 
-// small helpers
-const json = (status, body) => ({
-  statusCode: status,
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
+// Simple key generator: VMIX-XXXX-XXXX-XXXX
+function newKey() {
+  const chunk = () => Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `VMIX-${chunk()}-${chunk()}-${chunk()}`;
+}
 
-// Verify Woo signature using RAW body string (must NOT stringify again!)
-function verifyWooSignature(headers, rawBody) {
-  try {
-    const sigHeader =
-      headers["x-wc-webhook-signature"] ||
-      headers["X-WC-Webhook-Signature"] ||
-      headers["x-wc-webhook-signature".toLowerCase()];
-
-    if (!sigHeader || !WC_WEBHOOK_SECRET) return false;
-
-    const computed = crypto
-      .createHmac("sha256", WC_WEBHOOK_SECRET)
-      .update(rawBody || "")
-      .digest("base64");
-
-    // timing-safe compare
-    const a = Buffer.from(sigHeader);
-    const b = Buffer.from(computed);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
+exports.handler = async (event) => {
+  // Health check in browser
+  if (event.httpMethod === "GET") {
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ok: true, note: "Generator ready" })
+    };
   }
-}
 
-// Simple key generator
-function makeKey(prefix = "VMIX") {
-  const rnd = Math.random().toString(36).slice(2, 6).toUpperCase();
-  const y = new Date().getFullYear();
-  return `Bensly-${prefix}-${y}-${rnd}`;
-}
+  // Only accept POSTs from Woo
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, body: "Method Not Allowed" };
+  }
 
-// Insert license into DB
-async function createLicense({ email, order_id }) {
-  const key = makeKey("VMIX");
-  const row = {
+  const raw = event.body || "";
+  let payload = null;
+
+  // Try to parse JSON (Woo sends JSON)
+  try {
+    payload = JSON.parse(raw || "{}");
+  } catch {
+    // If we can’t parse, but it’s Woo's ping, still reply 200 below
+  }
+
+  const headerSig =
+    event.headers["x-wc-webhook-signature"] ||
+    event.headers["X-WC-Webhook-Signature"];
+
+  // 1) Allow Woo's "ping" when saving the webhook (often no useful body/signature)
+  //    Woo typically sends {"webhook_id": ..., "test":"ping"}
+  if ((payload && (payload.test === "ping" || payload.webhook_id)) && !headerSig) {
+    return { statusCode: 200, body: JSON.stringify({ ok: true, note: "Webhook ping OK" }) };
+  }
+
+  // 2) For real deliveries we require both secret & signature
+  if (!SECRET) {
+    return { statusCode: 500, body: JSON.stringify({ ok: false, reason: "missing_secret" }) };
+  }
+  if (!headerSig) {
+    // Missing signature → unauthorized
+    return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "missing_signature" }) };
+  }
+
+  // Verify signature
+  const expected = makeSignature(raw, SECRET);
+  if (headerSig !== expected) {
+    return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "bad_signature" }) };
+  }
+
+  // At this point, it’s a valid Woo request.
+  // Woo sends the full order as the payload (for order.updated / order.paid topics).
+  // We’ll only act if the order is paid/processing/completed.
+  const order = payload || {};
+  const status = (order.status || "").toLowerCase();
+
+  const isPaid =
+    status === "processing" || status === "completed" || status === "paid";
+
+  // If it’s not a paid status, acknowledge but do nothing.
+  if (!isPaid) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ ok: true, skipped: true, note: `status=${status}` })
+    };
+  }
+
+  // Pull an email if possible
+  let email = order.billing && order.billing.email ? String(order.billing.email) : null;
+  if (!email && Array.isArray(order.meta_data)) {
+    const metaEmail = order.meta_data.find(m => (m.key || "").toLowerCase().includes("email"));
+    if (metaEmail) email = String(metaEmail.value || "");
+  }
+
+  const orderId = Number(order.id || order.number || Date.now());
+
+  // Generate a license key
+  const key = newKey();
+
+  // Insert into Supabase: licenses
+  // columns we use: key (PK), plan, status, max_devices, email, order_id
+  const insert = {
     key,
     plan: "full",
     status: "active",
     max_devices: 2,
-    email: email || null,
-    order_id: order_id || null,
-    // expires_date: null  // leave null for no expiry
+    email,
+    order_id: orderId
   };
-  const { error } = await supabase.from("licenses").insert(row);
-  if (error) throw error;
-  return { key, plan: "full" };
-}
 
-exports.handler = async (event, context) => {
-  // Health check
-  if (event.httpMethod !== "POST") {
-    return json(200, { ok: true, note: "Generator ready" });
+  const { error: insErr } = await supabase.from("licenses").insert(insert);
+
+  if (insErr) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ ok: false, reason: "db_insert_failed", detail: insErr.message })
+    };
   }
 
-  const raw = event.body || "";
-
-  // Verify signature (Woo sends one when you save/test)
-  const okSig = verifyWooSignature(event.headers || {}, raw);
-  if (!okSig) {
-    // Return 401 so Woo shows “401” when secret doesn’t match
-    return json(401, { ok: false, reason: "bad_signature" });
-  }
-
-  // Try parse JSON
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch (e) {
-    return json(400, { ok: false, reason: "bad_json", detail: e.message });
-  }
-
-  // Woo sends different shapes. Handle “ping/test” gracefully.
-  // If there’s no order info, just acknowledge.
-  const order = payload?.data?.order || payload?.order || null;
-
-  // If this is clearly a ping (no order), reply 200 so Woo can save the webhook
-  if (!order) {
-    return json(200, { ok: true, note: "ping_ack" });
-  }
-
-  // Decide if we should issue a key (e.g., order status completed/processing/paid)
-  const status = (order.status || "").toLowerCase();
-  const allowed = ["completed", "processing", "paid"];
-  if (!allowed.includes(status)) {
-    // Not a paid/completed state; no key issued.
-    return json(200, { ok: true, skipped: true, status });
-  }
-
-  // Grab buyer email + order id if available
-  const email =
-    order.billing?.email ||
-    payload?.data?.billing?.email ||
-    payload?.billing?.email ||
-    null;
-
-  const order_id =
-    order.id || payload?.data?.order_id || payload?.id || null;
-
-  try {
-    const lic = await createLicense({ email, order_id });
-    return json(200, { ok: true, issued: lic });
-  } catch (e) {
-    return json(500, { ok: false, reason: "db_insert_failed", detail: e.message });
-  }
+  // Optionally, you could email the key from here or just rely on your store’s order email.
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      ok: true,
+      created: { key, plan: "full", max_devices: 2, email, order_id: orderId }
+    })
+  };
 };
