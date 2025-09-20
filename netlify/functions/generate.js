@@ -1,130 +1,139 @@
 // netlify/functions/generate.js
-// Robust WooCommerce → Netlify webhook that:
-// - Replies 200 to Woo "ping" tests (no signature needed)
-// - Verifies HMAC signature for real order payloads
-// - Creates a license row in Supabase (max 2 devices, no expiry)
+// WooCommerce → Netlify → Supabase license generator
+// - Always 200 for Woo "ping" (webhook save test)
+// - HMAC check for real order payloads (handles base64 bodies)
+// - Inserts license: plan=full, status=active, max_devices=2
 
 const crypto = require("crypto");
 const { supabase } = require("./_supabase");
 
 const SECRET = process.env.WC_WEBHOOK_SECRET;
 
-// HMAC-SHA256 base64, same as WooCommerce
-function makeSignature(rawBody, secret) {
-  return crypto.createHmac("sha256", String(secret)).update(rawBody).digest("base64");
+// ---- helpers ---------------------------------------------------------------
+
+function toBufferFromEventBody(event) {
+  if (!event || event.body == null) return Buffer.from("");
+  if (event.isBase64Encoded) {
+    return Buffer.from(event.body, "base64");
+  }
+  // Netlify gives us a UTF-8 string otherwise
+  return Buffer.from(event.body, "utf8");
 }
 
-// Simple key generator: VMIX-XXXX-XXXX-XXXX
+// HMAC-SHA256 in base64, like WooCommerce
+function makeSignature(buf, secret) {
+  return crypto.createHmac("sha256", String(secret)).update(buf).digest("base64");
+}
+
+function timingSafeEquals(a, b) {
+  const ab = Buffer.from(a || "", "utf8");
+  const bb = Buffer.from(b || "", "utf8");
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 function newKey() {
   const chunk = () => Math.random().toString(36).slice(2, 6).toUpperCase();
   return `VMIX-${chunk()}-${chunk()}-${chunk()}`;
 }
 
+// ---- handler ---------------------------------------------------------------
+
 exports.handler = async (event) => {
-  // Health check in browser
+  // Simple GET health check
   if (event.httpMethod === "GET") {
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ok: true, note: "Generator ready" })
+      body: JSON.stringify({ ok: true, note: "Generator ready" }),
     };
   }
 
-  // Only accept POSTs from Woo
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  const raw = event.body || "";
+  // Read raw bytes & JSON (if possible)
+  const rawBuf = toBufferFromEventBody(event);
   let payload = null;
+  try { payload = JSON.parse(rawBuf.toString("utf8") || "{}"); } catch {}
 
-  // Try to parse JSON (Woo sends JSON)
-  try {
-    payload = JSON.parse(raw || "{}");
-  } catch {
-    // If we can’t parse, but it’s Woo's ping, still reply 200 below
-  }
-
+  // Header names can vary in case
   const headerSig =
     event.headers["x-wc-webhook-signature"] ||
-    event.headers["X-WC-Webhook-Signature"];
+    event.headers["X-WC-Webhook-Signature"] ||
+    event.headers["x-wc-webhook-signature".toLowerCase()];
 
-  // 1) Allow Woo's "ping" when saving the webhook (often no useful body/signature)
-  //    Woo typically sends {"webhook_id": ..., "test":"ping"}
-  if ((payload && (payload.test === "ping" || payload.webhook_id)) && !headerSig) {
+  // 1) ALLOW WOO "PING" UNCONDITIONALLY (to avoid 401s on Save)
+  //    Woo sends {"webhook_id":..., "test":"ping"} when you save or “deliver sample”.
+  if (payload && (payload.test === "ping" || payload.webhook_id)) {
+    console.log("Woo ping received — returning 200 without signature check.");
     return { statusCode: 200, body: JSON.stringify({ ok: true, note: "Webhook ping OK" }) };
   }
 
-  // 2) For real deliveries we require both secret & signature
+  // 2) Real deliveries require secret & signature
   if (!SECRET) {
+    console.error("Missing WC_WEBHOOK_SECRET in Netlify env");
     return { statusCode: 500, body: JSON.stringify({ ok: false, reason: "missing_secret" }) };
   }
   if (!headerSig) {
-    // Missing signature → unauthorized
     return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "missing_signature" }) };
   }
 
-  // Verify signature
-  const expected = makeSignature(raw, SECRET);
-  if (headerSig !== expected) {
+  const expected = makeSignature(rawBuf, SECRET);
+  if (!timingSafeEquals(headerSig, expected)) {
+    console.warn("Bad signature on webhook");
     return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "bad_signature" }) };
   }
 
-  // At this point, it’s a valid Woo request.
-  // Woo sends the full order as the payload (for order.updated / order.paid topics).
-  // We’ll only act if the order is paid/processing/completed.
+  // 3) At this point we have a valid Woo request (JSON order)
   const order = payload || {};
-  const status = (order.status || "").toLowerCase();
-
+  const status = String(order.status || "").toLowerCase();
   const isPaid =
     status === "processing" || status === "completed" || status === "paid";
 
-  // If it’s not a paid status, acknowledge but do nothing.
   if (!isPaid) {
+    // Not paid yet — acknowledge but skip
     return {
       statusCode: 200,
-      body: JSON.stringify({ ok: true, skipped: true, note: `status=${status}` })
+      body: JSON.stringify({ ok: true, skipped: true, note: `status=${status}` }),
     };
   }
 
-  // Pull an email if possible
-  let email = order.billing && order.billing.email ? String(order.billing.email) : null;
-  if (!email && Array.isArray(order.meta_data)) {
-    const metaEmail = order.meta_data.find(m => (m.key || "").toLowerCase().includes("email"));
-    if (metaEmail) email = String(metaEmail.value || "");
+  // Grab customer email (if present)
+  let email = order?.billing?.email || null;
+  if (!email && Array.isArray(order?.meta_data)) {
+    const m = order.meta_data.find(x => (x.key || "").toLowerCase().includes("email"));
+    if (m) email = String(m.value || "");
   }
 
   const orderId = Number(order.id || order.number || Date.now());
-
-  // Generate a license key
   const key = newKey();
 
-  // Insert into Supabase: licenses
-  // columns we use: key (PK), plan, status, max_devices, email, order_id
-  const insert = {
+  const insertRow = {
     key,
     plan: "full",
     status: "active",
     max_devices: 2,
     email,
-    order_id: orderId
+    order_id: orderId,
   };
 
-  const { error: insErr } = await supabase.from("licenses").insert(insert);
-
+  const { error: insErr } = await supabase.from("licenses").insert(insertRow);
   if (insErr) {
+    console.error("Supabase insert error:", insErr);
     return {
       statusCode: 500,
-      body: JSON.stringify({ ok: false, reason: "db_insert_failed", detail: insErr.message })
+      body: JSON.stringify({ ok: false, reason: "db_insert_failed", detail: insErr.message }),
     };
   }
 
-  // Optionally, you could email the key from here or just rely on your store’s order email.
   return {
     statusCode: 200,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ok: true,
-      created: { key, plan: "full", max_devices: 2, email, order_id: orderId }
-    })
+      created: { key, plan: "full", max_devices: 2, email, order_id: orderId },
+    }),
   };
 };
