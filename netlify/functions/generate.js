@@ -1,134 +1,88 @@
-// functions/generate.js
+// netlify/functions/generate.js
 const crypto = require('crypto');
 const { supabase } = require('./_supabase');
 
-function log(...args) {
-  // Netlify will show this in Function Logs
-  console.log('[generate]', ...args);
-}
+const SECRET = process.env.WC_WEBHOOK_SECRET;
 
-function verifyWooSignature(rawBody, secret, headerSig) {
-  try {
-    if (!secret || !headerSig) return false;
-    const digest = crypto
-      .createHmac('sha256', secret)
-      .update(rawBody, 'utf8')
-      .digest('base64');
-    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(headerSig));
-  } catch (e) {
-    log('signature error', e);
-    return false;
-  }
-}
-
-function makeLicenseKey(prefix = 'VMIX') {
-  return `${prefix}-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+// HMAC-SHA256 base64 (Woo’s signature method)
+function makeSig(secret, raw) {
+  return crypto.createHmac('sha256', secret).update(raw).digest('base64');
 }
 
 exports.handler = async (event) => {
   try {
-    if (event.httpMethod !== 'POST') {
-      return { statusCode: 405, body: 'Method Not Allowed' };
+    // Basic health check
+    if (!SECRET) {
+      return resp(500, { ok: false, reason: 'server_misconfig', detail: 'WC_WEBHOOK_SECRET missing' });
     }
 
-    const qs = new URLSearchParams(event.rawQuery || event.queryStringParameters || {});
-    const debugMode = (qs.get && qs.get('debug') === '1') || event.queryStringParameters?.debug === '1';
+    const rawBody = event.body || '';               // RAW string
+    const headers = event.headers || {};
+    const topic = (headers['x-wc-webhook-topic'] || headers['X-WC-Webhook-Topic'] || '').toString();
+    const sig = (headers['x-wc-webhook-signature'] || headers['X-WC-Webhook-Signature'] || '').toString();
 
-    const secret = process.env.WC_WEBHOOK_SECRET || '';
-    const headerSig = event.headers['x-wc-webhook-signature'] || event.headers['X-WC-Webhook-Signature'];
-    const rawBody = event.body || '';
+    // Allow quick debugging (DON’T leave debug=1 forever in production)
+    const debugMode = (event.queryStringParameters || {}).debug === '1';
 
-    // Signature check (allow bypass in debug mode so you can test end-to-end)
-    const sigOk = verifyWooSignature(rawBody, secret, headerSig);
-    if (!sigOk && !debugMode) {
-      log('invalid signature', { hasSecret: !!secret, hasHeader: !!headerSig });
-      return { statusCode: 401, body: 'Invalid signature' };
+    // Handle Woo "test ping" gracefully
+    if (topic.startsWith('webhooks.')) {
+      return resp(200, { ok: true, note: 'pong', topic });
     }
 
-    let order = null;
-    try {
-      order = JSON.parse(rawBody);
-    } catch (e) {
-      log('JSON parse error; body was:', rawBody.slice(0, 500));
-      return { statusCode: 400, body: 'Bad JSON payload' };
+    // Verify signature
+    const expected = makeSig(SECRET, rawBody);
+    if (!sig || sig !== expected) {
+      return resp(401, {
+        ok: false,
+        reason: 'bad_signature',
+        ...(debugMode ? {
+          topic,
+          sig_present: !!sig,
+          expected_sample: expected.slice(0, 8) + '…',
+        } : {})
+      });
     }
 
-    // Woo sends a full order object for “order.*” topics
-    const orderId = order.id || order.order_id || null;
-    const status = (order.status || '').toLowerCase();
+    // Parse JSON
+    let data;
+    try { data = JSON.parse(rawBody); }
+    catch { return resp(400, { ok: false, reason: 'bad_json' }); }
+
+    // Pull fields (works for order.paid and order.updated bodies)
+    const orderId = data.id || data.order_id || null;
     const email =
-      order.billing?.email ||
-      order.customer_email ||
-      (order.billing && order.billing.email) ||
-      '';
+      (data.billing && data.billing.email) ||
+      data.customer_email ||
+      (data.customer && data.customer.email) ||
+      null;
 
-    // Optional: see what Woo sent (remove after debugging)
-    log('order summary', { orderId, status, email });
+    // Generate key
+    const key = `VMT-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+    const plan = 'full';
+    const max_devices = 2;
 
-    // Only process when paid
-    const isPaid = status === 'processing' || status === 'completed';
-    if (!isPaid) {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ ok: true, skipped: true, reason: 'Order not paid', orderId, status })
-      };
-    }
-
-    if (!email) {
-      log('missing email in order');
-      return { statusCode: 400, body: 'Billing email missing in order' };
-    }
-
-    // Idempotency: already generated for this order?
-    const { data: existing, error: findErr } = await supabase
+    // Insert license
+    const { error } = await supabase
       .from('licenses')
-      .select('key, order_id')
-      .eq('order_id', orderId)
-      .limit(1)
-      .maybeSingle();
+      .insert([{ key, plan, status: 'active', max_devices, order_id: orderId, email }]);
 
-    if (findErr) {
-      log('Supabase select error', findErr);
-      return { statusCode: 500, body: 'Supabase read error' };
+    if (error) {
+      return resp(500, { ok: false, reason: 'db_insert_failed', detail: error.message });
     }
 
-    if (existing?.key) {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ ok: true, reused: true, key: existing.key, orderId })
-      };
-    }
+    // (Optional) you could email the key here via your email provider webhook or WP email
 
-    // Create license
-    const newKey = makeLicenseKey('VMIX');
-    const nowIso = new Date().toISOString();
+    return resp(200, { ok: true, key, plan, max_devices, email, orderId });
 
-    const insertRow = {
-      key: newKey,
-      plan: 'full',
-      active: true,
-      email,
-      order_id: orderId,
-      max_devices: 1,
-      created_at: nowIso
-      // expires_at: null
-    };
-
-    const { error: insErr } = await supabase.from('licenses').insert([insertRow]);
-    if (insErr) {
-      log('Supabase insert error', insErr);
-      return { statusCode: 500, body: 'Supabase insert error' };
-    }
-
-    log('license created', { key: newKey, email, orderId });
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ ok: true, key: newKey, email, orderId })
-    };
-
-  } catch (err) {
-    log('unhandled error', err);
-    // Never throw a raw 500 without details in logs
-    return { statusCode: 500, body: 'Server error' };
+  } catch (e) {
+    return resp(500, { ok: false, reason: 'server_error', detail: String(e && e.message || e) });
   }
 };
+
+function resp(code, obj) {
+  return {
+    statusCode: code,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(obj)
+  };
+}
