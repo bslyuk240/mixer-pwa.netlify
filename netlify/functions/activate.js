@@ -1,50 +1,76 @@
+// activate.js  -> POST { key, deviceId }
 const { supabase } = require('./_supabase');
 
-function cors(body, statusCode = 200) {
-  return {
-    statusCode,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    },
-    body: JSON.stringify(body),
-  };
-}
-
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return cors({});
-  if (event.httpMethod !== 'POST') return cors({ error: 'Method Not Allowed' }, 405);
+  try {
+    if (event.httpMethod !== 'POST') return json({ ok: false, reason: 'method_not_allowed' }, 405);
+    const { key, deviceId } = JSON.parse(event.body || '{}');
+    if (!key || !deviceId) return json({ ok: false, reason: 'missing_params' }, 400);
 
-  const { key, deviceId } = JSON.parse(event.body || '{}');
-  if (!key || !deviceId) return cors({ ok: false, reason: 'missing_params' });
+    // Load license
+    const { data: lic, error } = await supabase
+      .from('licenses')
+      .select('key, status, max_devices')
+      .eq('key', key)
+      .single();
 
-  const { data: lic, error } = await supabase
-    .from('licenses')
-    .select('*')
-    .eq('key', key)
-    .single();
+    if (error || !lic) return json({ ok: false, reason: 'not_found' }, 404);
+    if (lic.status !== 'active') return json({ ok: false, reason: 'revoked' }, 403);
 
-  if (error || !lic || lic.status !== 'active') return cors({ ok: false, reason: 'invalid' });
-  if (lic.expires && new Date(lic.expires) < new Date()) return cors({ ok: false, reason: 'expired' });
+    // Does this device already exist? If yes, just mark active + update last_seen
+    const { data: existing, error: e1 } = await supabase
+      .from('activations')
+      .select('device_id, active')
+      .eq('license_key', key)
+      .eq('device_id', deviceId)
+      .maybeSingle();
 
-  // Upsert activation for this device
-  await supabase
-    .from('activations')
-    .upsert(
-      { license_key: key, device_id: deviceId, last_seen: new Date().toISOString() },
-      { onConflict: 'license_key,device_id' }
-    );
+    if (existing && !e1) {
+      await supabase
+        .from('activations')
+        .update({ active: true, last_seen: new Date().toISOString() })
+        .eq('license_key', key)
+        .eq('device_id', deviceId);
 
-  // Count unique devices after upsert
-  const { count } = await supabase
-    .from('activations')
-    .select('*', { count: 'exact', head: true })
-    .eq('license_key', key);
+      return json({ ok: true, reused: true });
+    }
 
-  if ((count || 0) > (lic.max_devices || 1)) {
-    return cors({ ok: false, reason: 'device_limit' });
+    // Count total UNIQUE devices ever used
+    const { data: rows, error: e2 } = await supabase
+      .from('activations')
+      .select('device_id')
+      .eq('license_key', key);
+
+    const uniqueCount = e2 ? 0 : new Set((rows || []).map(r => r.device_id)).size;
+
+    if (uniqueCount >= lic.max_devices) {
+      // HARD CAP: do not allow adding another unique device
+      return json({ ok: false, reason: 'device_limit_reached', max_devices: lic.max_devices }, 409);
+    }
+
+    // Insert new device (consumes a slot forever)
+    const { error: e3 } = await supabase
+      .from('activations')
+      .insert({
+        license_key: key,
+        device_id: deviceId,
+        active: true,
+        first_activated: new Date().toISOString(),
+        last_seen: new Date().toISOString()
+      });
+
+    if (e3) {
+      console.error(e3);
+      return json({ ok: false, reason: 'db_insert_failed' }, 500);
+    }
+
+    return json({ ok: true, reused: false });
+  } catch (e) {
+    console.error(e);
+    return json({ ok: false, reason: 'server_error' }, 500);
   }
-
-  return cors({ ok: true, plan: lic.plan, expires: lic.expires });
 };
+
+function json(body, status = 200) {
+  return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
