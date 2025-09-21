@@ -1,182 +1,190 @@
 // netlify/functions/generate.js
-// End-to-end Woo ⟶ Netlify ⟶ Supabase ⟶ Woo (order meta) with diagnostics & safe fallbacks.
-// No external packages.
-
 const crypto = require("crypto");
-const { supabase } = require("./_supabase");
+const { createClient } = require("@supabase/supabase-js");
 
-// ---------- response helpers ----------
-const JSON_HEADERS = { "Content-Type": "application/json" };
-const ok  = (b) => ({ statusCode: 200, headers: JSON_HEADERS, body: JSON.stringify(b) });
-const bad = (c,b) => ({ statusCode: c,   headers: JSON_HEADERS, body: JSON.stringify(b) });
+// ---- env ----
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const WC_WEBHOOK_SECRET = process.env.WC_WEBHOOK_SECRET || "";
+const WOO_URL = (process.env.WOOCOMMERCE_URL || "").replace(/\/+$/, "");
+const WOO_CK = process.env.WOOCOMMERCE_CK || "";
+const WOO_CS = process.env.WOOCOMMERCE_CS || "";
 
-// ---------- utils ----------
-function safeEq(a, b) {
-  try {
-    const A = Buffer.from(String(a) ?? "");
-    const B = Buffer.from(String(b) ?? "");
-    if (A.length !== B.length) return false;
-    return crypto.timingSafeEqual(A, B);
-  } catch { return a === b; }
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+  auth: { persistSession: false },
+});
+
+// ---- helpers ----
+const ok = (body, status = 200) => ({
+  statusCode: status,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+const log = (...a) => console.log("[generate]", ...a);
+
+function hmacValid(rawBody, signatureBase64) {
+  if (!WC_WEBHOOK_SECRET) return false;
+  if (!signatureBase64) return false;
+  const digest = crypto
+    .createHmac("sha256", WC_WEBHOOK_SECRET)
+    .update(rawBody, "utf8")
+    .digest("base64");
+  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signatureBase64));
 }
 
-function chunk() { return crypto.randomBytes(2).toString("hex").toUpperCase(); }
-function makeKey() { return `JMNX-VMIX-${chunk()}-${chunk()}-${chunk()}`; }
-
-async function makeUniqueKey() {
-  for (let i = 0; i < 7; i++) {
-    const candidate = makeKey();
-    const { data, error } = await supabase
-      .from("licenses").select("key").eq("key", candidate).maybeSingle();
-    if (error) throw new Error("db_check_failed: " + error.message);
-    if (!data) return candidate;
-  }
-  throw new Error("could_not_generate_unique_key");
+function makeKey() {
+  // e.g. VMIX-2025-3F7C-9KQ2
+  const part = () => Math.random().toString(36).toUpperCase().slice(2, 6);
+  return `VMIX-${new Date().getFullYear()}-${part()}-${part()}`;
 }
 
-function log(...args){ try{ console.info("[generate]", ...args); }catch{} }
-
-// ---------- Woo helpers ----------
-function basicAuthHeader(ck, cs) {
-  return "Basic " + Buffer.from(`${ck}:${cs}`).toString("base64");
-}
-
-async function fetchWooOrder(wooBase, ck, cs, orderId) {
-  const res = await fetch(`${wooBase}/wp-json/wc/v3/orders/${orderId}`, {
-    headers: { Authorization: basicAuthHeader(ck, cs) }
+async function wooGet(path) {
+  const url = `${WOO_URL}/wp-json/wc/v3${path}`;
+  const auth = Buffer.from(`${WOO_CK}:${WOO_CS}`).toString("base64");
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${auth}` },
   });
-  if (!res.ok) throw new Error("woo_fetch_order_failed: " + res.status);
+  if (!res.ok) throw new Error(`Woo GET ${path} -> ${res.status}`);
   return res.json();
 }
 
-// ---------- main ----------
+async function wooPut(path, body) {
+  const url = `${WOO_URL}/wp-json/wc/v3${path}`;
+  const auth = Buffer.from(`${WOO_CK}:${WOO_CS}`).toString("base64");
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Woo PUT ${path} -> ${res.status}: ${t}`);
+  }
+  return res.json();
+}
+
+async function upsertLicense({ key, email, order_id }) {
+  const row = {
+    key,
+    plan: "full",
+    status: "active",
+    email: email || null,
+    order_id: order_id || null,
+    max_devices: 2,
+  };
+  const { error } = await supabase.from("licenses").insert(row, { upsert: false });
+  if (error) throw new Error("supabase_insert_failed: " + error.message);
+  return row;
+}
+
+async function writeOrderMeta(orderId, metaKey, metaValue) {
+  const order = await wooGet(`/orders/${orderId}`);
+  const existing = Array.isArray(order.meta_data) ? order.meta_data : [];
+  const already = existing.find((m) => m.key === metaKey);
+  if (already) {
+    // update in place
+    already.value = metaValue;
+  } else {
+    existing.push({ key: metaKey, value: metaValue });
+  }
+  await wooPut(`/orders/${orderId}`, { meta_data: existing });
+}
+
 exports.handler = async (event) => {
-  const DEBUG = process.env.DEBUG_WEBHOOK === "1";
-  const FORCE_WRITE = process.env.FORCE_WRITE === "1";
-
-  if (event.httpMethod === "GET") {
-    return ok({ ok: true, note: "Generator ready" });
-  }
-  if (event.httpMethod !== "POST") {
-    return bad(405, { ok: false, error: "method_not_allowed" });
-  }
-
-  const raw = event.body || "";
-  const hdr = event.headers || {};
-  const ua = (hdr["user-agent"] || "").toLowerCase();
-  const topic = (hdr["x-wc-webhook-topic"] || "").toLowerCase();
-  const sig = hdr["x-wc-webhook-signature"] || hdr["X-WC-Webhook-Signature"];
-
-  if (DEBUG) {
-    log("incoming", {
-      topic,
-      hasSig: !!sig,
-      sigLen: (sig||"").length,
-      ua,
-      bodyLen: raw.length
-    });
-  }
-
-  // Let Woo save the webhook config (ping comes without signature sometimes)
-  const looksLikeWoo = ua.includes("woocommerce") || !!hdr["x-wc-webhook-source"];
-  if (!sig && looksLikeWoo) {
-    if (DEBUG) log("verification_ping_ok");
-    return ok({ ok: true, note: "verification_ping_ok" });
-  }
-
-  // Signature verify for real events
-  const secret = process.env.WC_WEBHOOK_SECRET;
-  if (!secret) return bad(500, { ok: false, error: "missing_env_wc_webhook_secret" });
-
-  const expected = crypto.createHmac("sha256", secret).update(raw).digest("base64");
-  if (!safeEq(sig || "", expected)) {
-    if (DEBUG) log("bad_signature");
-    return bad(401, { ok: false, error: "bad_signature" });
-  }
-
-  // Parse order payload
-  let order;
-  try { order = JSON.parse(raw); }
-  catch { return bad(400, { ok: false, error: "invalid_json" }); }
-
-  let orderId = order?.id ?? order?.order_id;
-  let status  = (order?.status || "").toLowerCase();
-  const email = order?.billing?.email || order?.customer_email || null;
-
-  if (DEBUG) log("parsed", { orderId, status, email });
-
-  if (!orderId) return bad(400, { ok: false, error: "missing_order_id" });
-
-  // If status missing or not paid states, try fetching the order to confirm
-  const wooBase = (process.env.WOOCOMMERCE_URL || "").replace(/\/+$/, "");
-  const ck = process.env.WOOCOMMERCE_CK;
-  const cs = process.env.WOOCOMMERCE_CS;
-
-  if ((!status || !["processing","completed"].includes(status)) && wooBase && ck && cs) {
-    try {
-      const full = await fetchWooOrder(wooBase, ck, cs, orderId);
-      status = (full?.status || status || "").toLowerCase();
-      if (!orderId && full?.id) orderId = full.id;
-      if (!email && full?.billing?.email) full.billing.email;
-      if (DEBUG) log("status_fetched", { status });
-    } catch (e) {
-      if (DEBUG) log("woo_fetch_order_failed", String(e.message || e));
-    }
-  }
-
-  if (!FORCE_WRITE && !["processing","completed"].includes(status)) {
-    if (DEBUG) log("skipping_status", status);
-    return ok({ ok: true, skipped: true, reason: "status_not_paid", status });
-  }
-
-  // Create + store license
-  let key;
   try {
-    key = await makeUniqueKey();
-    const { error: insErr } = await supabase.from("licenses").insert([{
-      key,
-      plan: "full",
-      status: "active",
-      max_devices: 2,
-      email,
-      order_id: orderId,
-    }]);
-    if (insErr) {
-      if (DEBUG) log("db_insert_failed", insErr.message);
-      return bad(500, { ok: false, error: "db_insert_failed", detail: insErr.message });
+    // health check
+    if (event.httpMethod === "GET") {
+      if (event.queryStringParameters?.ping) {
+        return ok({ ok: true, note: "Generator ready" });
+      }
+      // Manual trigger: /generate?test_order=123&auth=SECRET
+      const q = event.queryStringParameters || {};
+      if (q.test_order && q.auth === WC_WEBHOOK_SECRET) {
+        const testId = Number(q.test_order);
+        log("manual_trigger", { testId });
+        return await handleOrderId(testId);
+      }
+      return ok({ ok: true, usage: "POST Woo webhook payload or ?test_order=ID&auth=SECRET" });
     }
-    if (DEBUG) log("license_created", { key });
-  } catch (e) {
-    if (DEBUG) log("key_generation_failed", String(e.message || e));
-    return bad(500, { ok: false, error: "key_generation_failed", detail: String(e.message || e) });
-  }
 
-  // Write key back to Woo (order meta)
-  if (!wooBase || !ck || !cs) {
-    if (DEBUG) log("meta_write_skipped_missing_creds");
-    return ok({ ok: true, key, orderId, meta_write: false, warn: "missing_woo_creds" });
-  }
-
-  try {
-    const res = await fetch(`${wooBase}/wp-json/wc/v3/orders/${orderId}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": basicAuthHeader(ck, cs),
-      },
-      body: JSON.stringify({ meta_data: [{ key: "_license_key", value: key }] }),
-    });
-
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      if (DEBUG) log("meta_write_failed", res.status, txt.slice(0, 300));
-      return ok({ ok: true, key, orderId, meta_write: false, meta_status: res.status, meta_body: txt.slice(0, 500) });
+    // Webhook must be POSTed by Woo
+    if (event.httpMethod !== "POST") {
+      return ok({ ok: false, reason: "method_not_allowed" }, 405);
     }
-    if (DEBUG) log("meta_write_ok");
-    return ok({ ok: true, key, orderId, meta_write: true });
 
+    const raw = event.body || "";
+    const sig = event.headers["x-wc-webhook-signature"] || event.headers["X-WC-Webhook-Signature"];
+    log("incoming {");
+    log("  topic:", JSON.stringify(event.headers["x-wc-webhook-topic"] || "" , null, 0) || "(none)");
+    log("  hasSig:", !!sig, "sigLen:", (sig || "").length);
+    log("  ua:", JSON.stringify(event.headers["user-agent"] || "?", null, 0));
+    log("  bodyLen:", raw.length);
+    log("}");
+
+    // Signature required
+    if (!hmacValid(raw, sig)) {
+      return ok({ ok: false, reason: "unauthorized" }, 401);
+    }
+
+    const body = JSON.parse(raw);
+    // Woo sends many shapes; try to grab order id/status directly
+    const orderId = body?.id || body?.order_id || body?.data?.id;
+    const status = (body?.status || body?.data?.status || "").toLowerCase();
+    const topic = event.headers["x-wc-webhook-topic"] || "";
+
+    log("parsed { orderId:", orderId, ", status:", status, ", topic:", topic, "}");
+
+    // Fetch the order from Woo to be certain (also gives us email & current status)
+    if (!orderId) {
+      return ok({ ok: false, reason: "no_order_id" }, 400);
+    }
+
+    return await handleOrderId(orderId);
   } catch (e) {
-    if (DEBUG) log("meta_write_error", String(e.message || e));
-    return ok({ ok: true, key, orderId, meta_write: false, meta_error: String(e.message || e) });
+    console.error(e);
+    return ok({ ok: false, error: String(e.message || e) }, 500);
   }
 };
+
+async function handleOrderId(orderId) {
+  // Pull current order
+  const order = await wooGet(`/orders/${orderId}`);
+
+  const status = (order.status || "").toLowerCase();
+  const email =
+    order?.billing?.email ||
+    order?.shipping?.email ||
+    (Array.isArray(order?.billing) ? order.billing[0]?.email : null) ||
+    null;
+
+  log("status_fetched { status:", status, "}");
+
+  // Accept completed, processing, and on-hold (COD testing)
+  const ALLOWED = new Set(["completed", "processing", "on-hold"]);
+  if (!ALLOWED.has(status)) {
+    log("skip_status", status);
+    return ok({ ok: true, skipped: true, status });
+  }
+
+  // If order already has a key, don’t generate again
+  const meta = Array.isArray(order.meta_data) ? order.meta_data : [];
+  const existing = meta.find((m) => m.key === "_license_key");
+  if (existing?.value) {
+    log("already_has_key", existing.value);
+    return ok({ ok: true, reused: true, license: existing.value });
+  }
+
+  // Generate and save
+  const license = makeKey();
+  await upsertLicense({ key: license, email, order_id: orderId });
+
+  // Write back to Woo meta
+  await writeOrderMeta(orderId, "_license_key", license);
+
+  log("generated", license);
+  return ok({ ok: true, license, reused: false });
+}
