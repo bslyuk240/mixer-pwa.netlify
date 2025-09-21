@@ -1,199 +1,223 @@
 // netlify/functions/generate.js
-//
-// What this function does:
-// 1) (GET) health check -> returns {ok:true, note:"Generator ready"}
-// 2) (POST) WooCommerce webhook -> verifies HMAC signature, generates a license,
-//    stores it in Supabase, and writes it back to the Woo order as order meta
-//    and as a customer-visible order note.
+// Generates a license when Woo sends an order webhook,
+// saves it to Supabase, and writes the key back to the Woo order.
 
-const crypto = require('crypto');
-const { supabase } = require('./_supabase');
+const crypto = require("crypto");
+const WooCommerceRestApi = require("@woocommerce/woocommerce-rest-api").default;
+const { createClient } = require("@supabase/supabase-js");
 
-// ---- Environment variables you MUST set in Netlify (Site → Settings → Env vars) ----
-// SUPABASE_URL                (already set)
-// SUPABASE_SERVICE_KEY        (already set; service_role key)
-// WC_WEBHOOK_SECRET           (the same secret you put in the Woo webhook form)
-// WOOCOMMERCE_URL             (e.g. https://julinemart.com)
-// WOOCOMMERCE_CK              (Woo REST API consumer key with read/write on orders)
-// WOOCOMMERCE_CS              (Woo REST API consumer secret)
-// OPTIONAL:
-// PRODUCT_ID_REQUIRE (comma list of numeric product IDs; if set, webhook will only
-//   issue a license if the order contains at least one of these products)
-// DEBUG_ALLOW_NO_SIG = "true" (dev only: allow missing signature)
+// ---- ENV ----
+const {
+  SUPABASE_URL,
+  SUPABASE_SERVICE_KEY,
+  WC_WEBHOOK_SECRET,
+  WOOCOMMERCE_URL,
+  WOOCOMMERCE_CK,
+  WOOCOMMERCE_CS,
+} = process.env;
 
-// ---- Small helpers ----
-const json = (code, obj) => ({
-  statusCode: code,
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(obj),
+// ---- CLIENTS ----
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+  auth: { persistSession: false },
 });
 
-function b64HmacSHA256(secret, payload) {
-  return crypto.createHmac('sha256', secret).update(payload).digest('base64');
-}
+const woo = new WooCommerceRestApi({
+  url: WOOCOMMERCE_URL, // e.g. https://julinemart.com
+  consumerKey: WOOCOMMERCE_CK,
+  consumerSecret: WOOCOMMERCE_CS,
+  version: "wc/v3",
+});
 
-function ensureArray(a) { return Array.isArray(a) ? a : (a ? [a] : []); }
-
-function generateLicenseKey() {
-  // Example: VMIX-2025-9YH3-3KDG-8VQZ
-  const seg = () => Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(2,6);
-  return `VMIX-${new Date().getFullYear()}-${seg()}-${seg()}-${seg()}`;
-}
-
-// ---- Woo REST client (basic auth) ----
-async function wooRequest(method, path, body) {
-  const base = process.env.WOOCOMMERCE_URL;
-  const ck = process.env.WOOCOMMERCE_CK;
-  const cs = process.env.WOOCOMMERCE_CS;
-  if (!base || !ck || !cs) {
-    throw new Error('Woo REST env missing: WOOCOMMERCE_URL / CK / CS');
-  }
-  const url = `${base.replace(/\/+$/,'')}/wp-json/wc/v3${path}`;
-  const auth = Buffer.from(`${ck}:${cs}`).toString('base64');
-
-  const res = await fetch(url, {
-    method,
+// ---- HELPERS ----
+function json(statusCode, bodyObj, extraHeaders = {}) {
+  return {
+    statusCode,
     headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
+      ...extraHeaders,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: JSON.stringify(bodyObj),
+  };
+}
+
+function verifySignature(rawBody, signatureBase64, secret) {
+  if (!signatureBase64) return false;
+  try {
+    const hmac = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody, "utf8")
+      .digest("base64");
+    return crypto.timingSafeEqual(
+      Buffer.from(hmac),
+      Buffer.from(signatureBase64)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function getExistingLicenseForOrder(orderId) {
+  const { data, error } = await supabase
+    .from("licenses")
+    .select("*")
+    .eq("order_id", orderId)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function makeKey() {
+  const y = new Date().getFullYear();
+  const rand = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6 hex chars
+  // Format similar to your existing keys
+  return `Bensly-VMIX-${y}-${rand}`;
+}
+
+async function ensureUniqueKey() {
+  for (let i = 0; i < 5; i++) {
+    const key = makeKey();
+    const { data, error } = await supabase
+      .from("licenses")
+      .select("key")
+      .eq("key", key)
+      .limit(1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) return key;
+  }
+  throw new Error("could_not_generate_unique_key");
+}
+
+async function writeKeyToWoo(orderId, license, meta = {}) {
+  // 1) custom field
+  await woo.put(`orders/${orderId}`, {
+    meta_data: [
+      { key: "_license_key", value: license },
+      { key: "_license_meta", value: JSON.stringify(meta) },
+    ],
   });
 
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch {}
-  if (!res.ok) {
-    const msg = `Woo request failed ${res.status} ${res.statusText}`;
-    throw new Error(msg + ' :: ' + (text || ''));
-  }
-  return data;
+  // 2) customer-visible note
+  await woo.post(`orders/${orderId}/notes`, {
+    note: `🎟 License generated: ${license}\nPlan: ${meta.plan || "full"} · Max devices: ${meta.max_devices ?? 2}`,
+    customer_note: true, // send to customer (depends on email settings)
+  });
 }
 
-// ---- Main handler ----
+function shouldGenerateForOrder(order) {
+  // Only run on paid-ish statuses
+  const okStatuses = new Set(["processing", "completed"]);
+  if (!okStatuses.has((order?.status || "").toLowerCase())) return false;
+
+  // If the order already has _license_key in meta, skip (idempotence)
+  const hasKey = (order?.meta_data || []).some(
+    (m) => m?.key === "_license_key" && String(m?.value || "").length > 0
+  );
+  if (hasKey) return false;
+
+  // (Optional) Only if certain product(s) are present. Comment out if not needed.
+  // const productIds = (order?.line_items || []).map((li) => li.product_id);
+  // const TARGET_IDS = new Set([1234, 5678]); // put the ebook product ID(s) here
+  // if (!productIds.some((id) => TARGET_IDS.has(id))) return false;
+
+  return true;
+}
+
+// ---- HANDLER ----
 exports.handler = async (event) => {
   try {
-    // Health check
-    if (event.httpMethod === 'GET') {
-      return json(200, { ok: true, note: 'Generator ready' });
+    // Health check / simple GET
+    if (event.httpMethod === "GET") {
+      // test mode bypasses signature & body requirements
+      const isTest = event.queryStringParameters?.test === "1";
+      return json(200, {
+        ok: true,
+        note: isTest ? "Generator ready (test mode)" : "Generator ready",
+      });
     }
 
-    if (event.httpMethod !== 'POST') {
-      return json(405, { ok: false, error: 'method_not_allowed' });
+    if (event.httpMethod !== "POST") {
+      return json(405, { ok: false, error: "method_not_allowed" });
     }
 
-    const rawBody = event.body || '';
-    const sigHeader = event.headers['x-wc-webhook-signature'] || event.headers['X-WC-Webhook-Signature'];
-    const secret = process.env.WC_WEBHOOK_SECRET || '';
-    const allowNoSig = (process.env.DEBUG_ALLOW_NO_SIG || '').toLowerCase() === 'true';
-
-    // Verify Woo signature (HMAC SHA256 base64 of raw body with secret)
-    if (!sigHeader && !allowNoSig) {
-      return json(401, { ok: false, error: 'missing_signature' });
-    }
-    if (sigHeader && secret) {
-      const expected = b64HmacSHA256(secret, rawBody);
-      if (sigHeader !== expected) {
-        return json(401, { ok: false, error: 'signature_mismatch' });
+    // --- Signature check (unless test=1) ---
+    const isTest = event.queryStringParameters?.test === "1";
+    const rawBody = event.body || "";
+    const sig = event.headers["x-wc-webhook-signature"];
+    if (!isTest) {
+      if (!WC_WEBHOOK_SECRET) {
+        return json(500, { ok: false, error: "missing_wc_secret" });
+      }
+      const ok = verifySignature(rawBody, sig, WC_WEBHOOK_SECRET);
+      if (!ok) {
+        return json(401, { ok: false, error: "invalid_signature" });
       }
     }
 
-    // Parse the Woo payload (order object)
+    // Parse payload
     let payload;
     try {
       payload = JSON.parse(rawBody);
     } catch {
-      return json(400, { ok: false, error: 'invalid_json' });
+      return json(400, { ok: false, error: "invalid_json" });
     }
 
-    const orderId = payload.id || payload.order_id || payload.number;
+    const order = payload;
+    const orderId = Number(order?.id || payload?.order_id || 0);
     const email =
-      payload.billing?.email ||
-      payload.customer?.email ||
-      payload.customer_email ||
+      order?.billing?.email ||
+      order?.customer_email ||
+      payload?.customer_email ||
       null;
 
     if (!orderId) {
-      return json(400, { ok: false, error: 'no_order_id' });
+      return json(400, { ok: false, error: "missing_order_id" });
     }
 
-    // If you only want to issue keys for specific products, enforce here
-    const productFilter = (process.env.PRODUCT_ID_REQUIRE || '').trim();
-    if (productFilter) {
-      const requiredIds = productFilter.split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
-      const line = ensureArray(payload.line_items);
-      const found = line.some(li => li?.product_id && requiredIds.includes(Number(li.product_id)));
-      if (!found) {
-        // Not a product we generate a license for.
-        return json(200, { ok: true, skipped: true, reason: 'product_not_required' });
-      }
-    }
-
-    // 1) Reuse if this order already has a license
-    const existing = await supabase
-      .from('licenses')
-      .select('*')
-      .eq('order_id', orderId)
-      .limit(1)
-      .maybeSingle();
-
-    if (existing.error) {
-      return json(500, { ok: false, reason: 'db_select_failed', detail: existing.error.message });
-    }
-
-    let licenseRow = existing.data;
-    if (!licenseRow) {
-      // 2) Create a new license
-      const key = generateLicenseKey();
-      const ins = await supabase
-        .from('licenses')
-        .insert([{
-          key,
-          plan: 'full',
-          status: 'active',
-          max_devices: 2,
-          email: email || null,
-          order_id: orderId,
-        }])
-        .select()
-        .single();
-
-      if (ins.error) {
-        return json(500, { ok: false, reason: 'db_insert_failed', detail: ins.error.message });
-      }
-      licenseRow = ins.data;
-    }
-
-    const licenseKey = licenseRow.key;
-
-    // 3) Write back into Woo order meta as _license_key
-    try {
-      await wooRequest('PUT', `/orders/${orderId}`, {
-        meta_data: [{ key: '_license_key', value: licenseKey }],
+    if (!shouldGenerateForOrder(order)) {
+      return json(200, {
+        ok: true,
+        skipped: true,
+        reason:
+          "status_not_eligible_or_already_has_key_or_product_filter_not_matched",
       });
-    } catch (e) {
-      // not fatal — still return ok, but include warning
-      console.warn('Failed to write order meta:', e?.message || e);
     }
 
-    // 4) Also add a customer-visible order note (nice UX)
-    try {
-      await wooRequest('POST', `/orders/${orderId}/notes`, {
-        note: `Your license key: ${licenseKey}\n\nKeep this safe. You can activate in the app via the "Enter license key" field.`,
-        customer_note: true,
+    // Idempotency: already created for this order?
+    const existing = await getExistingLicenseForOrder(orderId);
+    if (existing?.key) {
+      // still ensure Woo has it (write again if needed)
+      await writeKeyToWoo(orderId, existing.key, {
+        plan: existing.plan || "full",
+        max_devices: existing.max_devices ?? 2,
       });
-    } catch (e) {
-      console.warn('Failed to add order note:', e?.message || e);
+      return json(200, { ok: true, reused: true, key: existing.key });
     }
 
-    return json(200, {
-      ok: true,
+    // Make a fresh license
+    const license = await ensureUniqueKey();
+
+    // Insert into Supabase
+    const row = {
+      key: license,
+      plan: "full",
+      status: "active",
+      max_devices: 2,
+      email,
       order_id: orderId,
-      email: email || null,
-      license_key: licenseKey,
-      reused: !!existing.data,
-    });
-  } catch (err) {
-    return json(500, { ok: false, error: 'unhandled', detail: String(err?.message || err) });
+    };
+
+    const { error: insErr } = await supabase.from("licenses").insert([row]);
+    if (insErr) {
+      return json(500, { ok: false, error: "db_insert_failed", detail: insErr.message });
+    }
+
+    // Write back to Woo order
+    await writeKeyToWoo(orderId, license, { plan: "full", max_devices: 2 });
+
+    return json(200, { ok: true, key: license });
+  } catch (e) {
+    return json(500, { ok: false, error: "server_error", detail: String(e?.message || e) });
   }
 };
