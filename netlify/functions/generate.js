@@ -1,139 +1,133 @@
 // netlify/functions/generate.js
-// WooCommerce → Netlify → Supabase license generator
-// - Always 200 for Woo "ping" (webhook save test)
-// - HMAC check for real order payloads (handles base64 bodies)
-// - Inserts license: plan=full, status=active, max_devices=2
+// Verifies WooCommerce webhook signature, then creates a license in Supabase.
 
 const crypto = require("crypto");
 const { supabase } = require("./_supabase");
 
-const SECRET = process.env.WC_WEBHOOK_SECRET;
-
-// ---- helpers ---------------------------------------------------------------
-
-function toBufferFromEventBody(event) {
-  if (!event || event.body == null) return Buffer.from("");
-  if (event.isBase64Encoded) {
-    return Buffer.from(event.body, "base64");
-  }
-  // Netlify gives us a UTF-8 string otherwise
-  return Buffer.from(event.body, "utf8");
+// ===== Helpers =====
+function base64HmacSHA256(secret, rawBodyBuffer) {
+  return crypto.createHmac("sha256", secret).update(rawBodyBuffer).digest("base64");
 }
 
-// HMAC-SHA256 in base64, like WooCommerce
-function makeSignature(buf, secret) {
-  return crypto.createHmac("sha256", String(secret)).update(buf).digest("base64");
+function response(status, bodyObj) {
+  return {
+    statusCode: status,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bodyObj),
+  };
 }
 
-function timingSafeEquals(a, b) {
-  const ab = Buffer.from(a || "", "utf8");
-  const bb = Buffer.from(b || "", "utf8");
-  if (ab.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ab, bb);
+// Build a simple license key (feel free to change format)
+function makeKey() {
+  const a = Date.now().toString(36).toUpperCase();
+  const b = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `VMIX-${a}-${b}`;
 }
-
-function newKey() {
-  const chunk = () => Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `VMIX-${chunk()}-${chunk()}-${chunk()}`;
-}
-
-// ---- handler ---------------------------------------------------------------
 
 exports.handler = async (event) => {
-  // Simple GET health check
+  // Health check
   if (event.httpMethod === "GET") {
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ok: true, note: "Generator ready" }),
-    };
+    return response(200, { ok: true, note: "Generator ready" });
   }
 
+  // POST from Woo
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+    return response(405, { ok: false, error: "method_not_allowed" });
   }
 
-  // Read raw bytes & JSON (if possible)
-  const rawBuf = toBufferFromEventBody(event);
-  let payload = null;
-  try { payload = JSON.parse(rawBuf.toString("utf8") || "{}"); } catch {}
-
-  // Header names can vary in case
-  const headerSig =
-    event.headers["x-wc-webhook-signature"] ||
-    event.headers["X-WC-Webhook-Signature"] ||
-    event.headers["x-wc-webhook-signature".toLowerCase()];
-
-  // 1) ALLOW WOO "PING" UNCONDITIONALLY (to avoid 401s on Save)
-  //    Woo sends {"webhook_id":..., "test":"ping"} when you save or “deliver sample”.
-  if (payload && (payload.test === "ping" || payload.webhook_id)) {
-    console.log("Woo ping received — returning 200 without signature check.");
-    return { statusCode: 200, body: JSON.stringify({ ok: true, note: "Webhook ping OK" }) };
-  }
-
-  // 2) Real deliveries require secret & signature
-  if (!SECRET) {
+  const secret = process.env.WC_WEBHOOK_SECRET;
+  if (!secret) {
     console.error("Missing WC_WEBHOOK_SECRET in Netlify env");
-    return { statusCode: 500, body: JSON.stringify({ ok: false, reason: "missing_secret" }) };
-  }
-  if (!headerSig) {
-    return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "missing_signature" }) };
+    return response(500, { ok: false, error: "server_misconfigured" });
   }
 
-  const expected = makeSignature(rawBuf, SECRET);
-  if (!timingSafeEquals(headerSig, expected)) {
-    console.warn("Bad signature on webhook");
-    return { statusCode: 401, body: JSON.stringify({ ok: false, reason: "bad_signature" }) };
+  // IMPORTANT: use the raw body bytes exactly as Woo sent them
+  const isBase64 = event.isBase64Encoded;
+  const rawBodyBuf = isBase64
+    ? Buffer.from(event.body || "", "base64")
+    : Buffer.from(event.body || "", "utf8");
+
+  // Woo sends signature in this header
+  const provided = event.headers["x-wc-webhook-signature"] || event.headers["X-Wc-Webhook-Signature"];
+  const topic     = event.headers["x-wc-webhook-topic"] || event.headers["X-Wc-Webhook-Topic"];
+  const delivery  = event.headers["x-wc-webhook-delivery-id"] || event.headers["X-Wc-Webhook-Delivery-Id"];
+
+  // Optional debug bypass (ONLY set this temporarily in Netlify if you need it)
+  const allowBypass = process.env.WC_BYPASS_SIG === "1";
+
+  // Compute the expected signature
+  const expected = base64HmacSHA256(secret, rawBodyBuf);
+
+  // Log minimal info for debugging (never log your secret)
+  console.log("[generate] topic:", topic || "(none)", "delivery:", delivery || "(none)");
+  console.log("[generate] provided sig len:", provided ? provided.length : 0, "expected sig len:", expected.length);
+
+  if (!allowBypass) {
+    if (!provided) {
+      return response(401, { ok: false, error: "missing_signature" });
+    }
+    if (provided !== expected) {
+      // You’ll see these lengths in Netlify logs to confirm mismatch
+      return response(401, { ok: false, error: "bad_signature" });
+    }
+  } else {
+    console.warn("[generate] WARNING: signature check bypassed (WC_BYPASS_SIG=1).");
   }
 
-  // 3) At this point we have a valid Woo request (JSON order)
-  const order = payload || {};
-  const status = String(order.status || "").toLowerCase();
-  const isPaid =
-    status === "processing" || status === "completed" || status === "paid";
-
-  if (!isPaid) {
-    // Not paid yet — acknowledge but skip
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ ok: true, skipped: true, note: `status=${status}` }),
-    };
+  // Parse JSON body after signature check
+  let payload;
+  try {
+    payload = JSON.parse(rawBodyBuf.toString("utf8"));
+  } catch (e) {
+    console.error("JSON parse failed:", e);
+    return response(400, { ok: false, error: "bad_json" });
   }
 
-  // Grab customer email (if present)
-  let email = order?.billing?.email || null;
-  if (!email && Array.isArray(order?.meta_data)) {
-    const m = order.meta_data.find(x => (x.key || "").toLowerCase().includes("email"));
-    if (m) email = String(m.value || "");
+  // Pull email & order id in a Woo-agnostic way
+  const orderId = payload.id || payload.order_id || null;
+  const email =
+    payload?.billing?.email ||
+    payload?.customer_email ||
+    payload?.customer?.email ||
+    payload?.payer_email ||
+    null;
+
+  if (!email) {
+    // Not fatal, but useful to know
+    console.warn("No email found in webhook payload");
   }
 
-  const orderId = Number(order.id || order.number || Date.now());
-  const key = newKey();
+  // Make the license
+  const key = makeKey();
 
-  const insertRow = {
+  // Insert into Supabase
+  const row = {
     key,
     plan: "full",
     status: "active",
     max_devices: 2,
     email,
     order_id: orderId,
+    created_at: new Date().toISOString(),
   };
 
-  const { error: insErr } = await supabase.from("licenses").insert(insertRow);
-  if (insErr) {
-    console.error("Supabase insert error:", insErr);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ ok: false, reason: "db_insert_failed", detail: insErr.message }),
-    };
+  try {
+    const { data, error } = await supabase.from("licenses").insert(row).select().single();
+    if (error) {
+      console.error("Supabase insert error:", error);
+      return response(500, { ok: false, error: "db_insert_failed" });
+    }
+    console.log("License created:", data?.key, "order:", orderId);
+  } catch (e) {
+    console.error("Supabase exception:", e);
+    return response(500, { ok: false, error: "db_exception" });
   }
 
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ok: true,
-      created: { key, plan: "full", max_devices: 2, email, order_id: orderId },
-    }),
-  };
+  // Return 200 so Woo marks webhook delivery as successful
+  return response(200, {
+    ok: true,
+    key,
+    plan: "full",
+    note: "License generated",
+  });
 };
